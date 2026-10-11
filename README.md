@@ -53,31 +53,28 @@ flowchart TD
 ## ⚡ Quickstart
 
 ### 1. Prerequisites
-- Docker & Docker Compose
-- Python 3.10+
+- Podman & Podman Compose (or Docker Compose)
 - Git
 
 ### 2. Configure Environment & Sync Obsidian Database
 ```bash
 # Copy and configure environment variables
 cp .env.example .env
-# Set OBSIDIAN_BRAIN_REPO_URL in .env
 
 # Clone or pull your Obsidian Second Brain into database/
 ./scripts/download_brain.sh
 ```
 
-### 3. Launch Local Infrastructure
+### 3. Run Everything with Podman
 ```bash
-cp infra-deploy/.env.example infra-deploy/.env
-cd infra-deploy
-docker compose up -d
+# Launch PostgreSQL, Redis, Golang backend, and Next.js frontend
+podman-compose up -d
+
+# Check running status
+podman-compose ps
 ```
 
-### 3. Verify Hermes Core
-```bash
-python hermes/main.py --status
-```
+Access the dashboard at [http://localhost:3000](http://localhost:3000) and API at [http://localhost:8080](http://localhost:8080).
 
 ---
 

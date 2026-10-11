@@ -1,0 +1,28 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Second Brain local database (Obsidian repository)
+database/
+
+# Dependency directories
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+bin/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db

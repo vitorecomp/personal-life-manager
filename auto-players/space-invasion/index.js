@@ -53,7 +53,7 @@ const login = async (driver) => {
 (async function example() {
 	let driver = await new Builder().forBrowser('firefox').build();
 	console.log(await driver.getSession());
-	await driver.get('https://w2-spaceinvasion.bitmeup.com/');
+	await driver.get('https://spaceinvasion.bitmeup.com/');
 	await login(driver);
 
 	// await driver.wait(until.titleIs('webdriver - Google Search'), 1000);

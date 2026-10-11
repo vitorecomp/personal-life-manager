@@ -10,7 +10,7 @@ A modular, automated **Second Brain** platform designed to capture external know
 flowchart TD
     subgraph Capture["1. Capture & Automation"]
         CR["crawlers/\nWeb, RSS, Bookmarks"]
-        SCH["schedulers/\nCron jobs, Bot automation"]
+        SCH["sub-systems/\nAutomated bots, Simulation tools"]
     end
 
     subgraph Infrastructure["2. Infrastructure (infra-deploy/)"]
@@ -43,8 +43,8 @@ flowchart TD
 | **`documentation/`** | System architecture, data flow diagrams, and Second Brain methodology. | [View Docs](file:///home/vitor/workspace/personal/personal-life-manager/documentation/README.md) |
 | **`hermes/`** | Core engine: LLM orchestration, semantic search, vector indexing, and assistant API. | [Explore Hermes](file:///home/vitor/workspace/personal/personal-life-manager/hermes/README.md) |
 | **`infra-deploy/`** | Docker Compose configurations (Postgres/pgvector, Redis), environment templates, and deployment scripts. | [View Deploy Specs](file:///home/vitor/workspace/personal/personal-life-manager/infra-deploy/README.md) |
-| **`personal-system/`** | Personal goal tracking, routine checklists, daily logs, and reflection journals. | [View Personal System](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/README.md) |
-| **`schedulers/`** | Scheduled automations, background jobs, legacy bots (`auto-players`, `satisfatory-plan`). | [Explore Schedulers](file:///home/vitor/workspace/personal/personal-life-manager/schedulers/README.md) |
+| **`personal-system/`** | Full-stack platform (Golang API + Next.js UI) to administer time, tasks, and servers, plus goals and routines. | [View Personal System](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/README.md) |
+| **`sub-systems/`** | Standalone sub-systems, automated bots, and game tools (`auto-players`, `satisfatory-plan`). | [Explore Sub-Systems](file:///home/vitor/workspace/personal/personal-life-manager/sub-systems/README.md) |
 | **`scripts/`** | Helper scripts (e.g. syncing Obsidian Second Brain GitHub repository). | [Explore Scripts](file:///home/vitor/workspace/personal/personal-life-manager/scripts/README.md) |
 | **`database/`** *(gitignored)* | Local clone of your Obsidian Second Brain markdown vault. | Synced via `./scripts/download_brain.sh` |
 

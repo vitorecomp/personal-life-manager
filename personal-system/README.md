@@ -1,26 +1,34 @@
 # Personal System
 
-The **Personal System** is the operational core of your personal life management within the Second Brain.
+The **Personal System** is the operational core of your personal life management within the Second Brain. It includes an interactive full-stack management platform (Golang + Next.js) alongside personal routines, goals, and logs.
 
 ---
 
-## 🎯 Purpose
+## 🏗️ Architecture
 
-While `crawlers/` collects external data and `hermes/` provides automated intelligence, `personal-system/` is where personal direction, intentionality, habits, and execution live.
+```mermaid
+flowchart LR
+    UI["Frontend (Next.js)\nTime, Tasks & Server Dashboard"] <-->|REST API| API["Backend (Golang)\nHealth Prober, Tasks & Time Engine"]
+    API <--> Store[("Data Store\n(JSON / DB)")]
+    API <--> Nodes["Managed Remote Servers\n(TCP/HTTP Probing)"]
+```
 
 ---
 
 ## 📁 Structure
 
+- [`backend/`](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/backend): High-performance Golang service managing tasks, time-tracking sessions, and server infrastructure health checks.
+- [`frontend/`](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/frontend): Next.js dashboard UI for administering time, tasks, and servers.
 - [`goals/`](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/goals): High-level aspirations, quarterly OKRs, and project milestones.
 - [`routines/`](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/routines): Daily, weekly, and monthly operational checklists and review templates.
 - [`logs/`](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/logs): Daily logs, reflections, decision journals, and habit records.
 
 ---
 
-## 🔄 Interaction with Hermes
+## 🚀 Running the Golang Backend
 
-Hermes can read the structures in `personal-system/` to:
-1. Provide daily briefings on scheduled routines and priorities.
-2. Cross-reference captured information with active goals.
-3. Generate weekly review summaries from daily logs.
+```bash
+cd personal-system/backend
+make run
+```
+Runs at `http://localhost:8080`. See [Backend Docs](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/backend/README.md) for full API details.

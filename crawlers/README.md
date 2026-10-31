@@ -57,3 +57,11 @@ Every crawler emits structured items following this standard schema:
 2. Implement extraction logic following the standard document schema.
 3. Add configuration to `.env` or the crawler configuration file.
 4. Wire the crawler execution into the `schedulers/` module or run on-demand.
+
+---
+
+## 📦 Crawlers
+
+| Crawler | What it captures |
+| :--- | :--- |
+| [`youtube-lists/`](youtube-lists/README.md) | All your YouTube playlists and their videos (metadata, comments, original-language transcripts) into SQLite + Markdown notes |

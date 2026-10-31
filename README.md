@@ -81,3 +81,4 @@ Access the dashboard at [http://localhost:3000](http://localhost:3000) and API a
 ## 📖 Key Documentation
 - [System Architecture](file:///home/vitor/workspace/personal/personal-life-manager/documentation/architecture.md)
 - [Second Brain Methodology](file:///home/vitor/workspace/personal/personal-life-manager/documentation/methodology.md)
+- [Agent & Contributor Guide (AGENTS.md)](file:///home/vitor/workspace/personal/personal-life-manager/AGENTS.md)

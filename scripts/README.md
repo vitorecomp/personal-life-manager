@@ -60,3 +60,22 @@ Optional `.env` settings: `DROPBOX_REMOTE` (the rclone remote name, default `dro
 - **Left out:** the notes and `.gitignore` (they're in git), `.git`, lock files and SQLite's temporary
   files.
 
+### 3. `git-hooks/pre-commit`
+A safety check run before every commit, in this repository and in `database/`. It refuses a commit
+that would add any of these:
+
+- **Credential-looking strings:** Google, AWS, OpenAI-style, GitHub and Slack keys, and private keys.
+- **Your real secrets:** the actual values of the `*KEY*`, `*TOKEN*`, `*SECRET*` and `*PASSWORD*`
+  settings in `.env`.
+- **Secret or data files:** `.env`, private keys, cookie files, `rclone.conf`, OAuth client files,
+  databases and git bundles.
+
+Placeholders such as `AKIA…EXAMPLE` or `sk-xxxx…` are allowed. If it's a false alarm, commit with
+`git commit --no-verify`.
+
+It is enabled per clone (git doesn't version this setting). After cloning, run:
+```bash
+git config core.hooksPath scripts/git-hooks                  # this repository
+git -C database config core.hooksPath ../scripts/git-hooks   # the notes repository
+```
+

@@ -28,3 +28,18 @@ personal-system/backend/data/*.json
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Secrets and private data (never commit; scripts/git-hooks/pre-commit also blocks them)
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+cookies*.txt
+rclone.conf
+client_secret*.json
+credentials*.json
+*.sqlite
+*.sqlite3
+*.bundle
+

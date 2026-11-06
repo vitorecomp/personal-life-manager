@@ -219,6 +219,17 @@ on-screen text verbatim, so this mostly happens with coding tutorials.
   at the top.
 - **Cost:** blocked answers still cost their input tokens, and they are included in the cost report.
 
+## Credentials shown in videos
+
+Coding tutorials sometimes show API keys or tokens on screen, and Gemini transcribes on-screen text.
+
+- **The prompt:** it tells Gemini never to reproduce credentials.
+- **Before writing:** every note is also scanned before it's written, and anything that looks like a
+  Google, AWS, OpenAI-style, GitHub or Slack key, or a private key, is replaced with
+  `[redacted …]`. That keeps them out of git and off GitHub, which would reject the push anyway.
+- **Not redacted:** the raw answer in the database (`ai_note.output_text`) is left as it came. The
+  database is only synced to Dropbox, never committed.
+
 ## Skipped videos report
 
 Every run ends with the videos it skipped and why, most frequent reason first:

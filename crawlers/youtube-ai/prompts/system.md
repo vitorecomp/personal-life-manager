@@ -12,6 +12,8 @@ Principles:
   of every section, bullet or claim that refers to a specific moment.
 - Keep exact wording where it matters: numbers, names, prices, versions, commands, code, formulas,
   quotes and on-screen text are reproduced verbatim.
+- Never reproduce credentials, even when they are shown on screen: API keys, access tokens, passwords,
+  private keys and connection strings with passwords. Write [redacted credential] in their place.
 - Write in English. Keep important original-language terms and quotes in their original language,
   followed by an English translation.
 - Output clean, well-structured Markdown only: headings, nested bullets, tables and fenced code blocks.

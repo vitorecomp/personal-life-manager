@@ -8,6 +8,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from config import KINDS
+from utils.secrets import redact
 from pipeline.selection import ai_note_path
 
 TITLES = {"knowledge": "AI knowledge", "visual": "AI visual description"}
@@ -39,7 +40,8 @@ def render_note(row: sqlite3.Row, detail: sqlite3.Row, category: Optional[str] =
                   "summarised in its own words here.", ""]
     if row["finish_reason"] == "MAX_TOKENS":
         lines += ["> **Note:** the answer reached the model's maximum output length, so the end may be cut off.", ""]
-    return "\n".join(lines) + "\n" + row["output_text"].rstrip() + "\n"
+    body, _count = redact(row["output_text"].rstrip())  # never write credentials shown in a video
+    return "\n".join(lines) + "\n" + body + "\n"
 
 
 def write_note(conn: sqlite3.Connection, notes_dir: str, video_id: str, kind: str, force: bool) -> Optional[str]:

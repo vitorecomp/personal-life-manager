@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Pre-commit check: refuse commits that would add credentials.
+
+Blocks (in the lines being added, so it stays fast on large commits):
+  - credential-looking strings (Google/AWS/OpenAI-style/GitHub/Slack keys, private keys)
+  - the actual secret values from the project's .env (any *KEY*, *TOKEN*, *SECRET*, *PASSWORD* value)
+  - files that hold secrets or data: .env, private keys, cookie files, rclone.conf, OAuth client files, databases
+Placeholders (AKIA...EXAMPLE, sk-xxxxxxxx...) are allowed. To commit anyway: git commit --no-verify
+
+Installed for this repository and for database/ with:  git config core.hooksPath scripts/git-hooks
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PATTERNS = [
+    ("Google API key", re.compile(r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])")),
+    ("AWS access key", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Z0-9])")),
+    ("API key", re.compile(r"(?<![A-Za-z0-9-])sk-(?:proj-|ant-)?[A-Za-z0-9_]{20,}")),
+    ("GitHub token", re.compile(r"(?<![A-Za-z0-9])(?:gh[pousr]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{40,})")),
+    ("Slack token", re.compile(r"(?<![A-Za-z0-9])xox[baprs]-[0-9A-Za-z-]{10,}")),
+    ("private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+]
+SECRET_FILES = re.compile(
+    r"(^|/)(\.env(\.(?!example$)[^/]*)?|.*\.(pem|key|p12|pfx|sqlite|sqlite3|db|bundle)|id_(rsa|ed25519|ecdsa)[^/]*"
+    r"|cookies[^/]*\.txt|rclone\.conf|client_secret[^/]*\.json|credentials[^/]*\.json)$"
+)
+
+
+def placeholder(value: str) -> bool:
+    body = re.sub(r"^(AIza|AKIA|ASIA|sk-(proj-|ant-)?|gh[pousr]_|github_pat_|xox[baprs]-)", "", value)
+    return value.endswith("EXAMPLE") or len(set(body.lower())) <= 4
+
+
+def env_secrets() -> dict:
+    found = {}
+    path = os.path.join(ROOT, ".env")
+    if os.path.isfile(path):
+        for line in open(path, encoding="utf-8"):
+            key, _, value = line.strip().partition("=")
+            value = value.strip().strip("\"'")
+            if re.search(r"KEY|TOKEN|SECRET|PASSWORD|PASS", key) and len(value) >= 12:
+                found[key] = value
+    return found
+
+
+def main() -> int:
+    names = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only",
+                            "--diff-filter=ACMR", "-z"], capture_output=True, text=True).stdout.split("\0")
+    problems = [f"{name}: this kind of file holds secrets or data and must not be committed"
+                for name in names if name and SECRET_FILES.search(name)]
+    diff = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--cached", "--no-color", "-U0", "--no-prefix",
+                           "--diff-filter=ACMR"], capture_output=True, text=True, errors="replace").stdout
+    secrets = env_secrets()
+    path, line_no = "?", 0
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            path = line[4:]
+        elif line.startswith("@@"):
+            match = re.search(r"\+(\d+)", line)
+            line_no = int(match.group(1)) if match else 0
+        elif line.startswith("+"):
+            text = line[1:]
+            for label, pattern in PATTERNS:
+                for m in pattern.finditer(text):
+                    if not placeholder(m.group(0)):
+                        problems.append(f"{path}:{line_no}: {label} ({m.group(0)[:6]}…)")
+            for key, value in secrets.items():
+                if value in text:
+                    problems.append(f"{path}:{line_no}: the value of {key} from .env")
+            line_no += 1
+    if not problems:
+        return 0
+    print("pre-commit: refusing to commit possible credentials:", file=sys.stderr)
+    for problem in problems[:30]:
+        print(f"  {problem}", file=sys.stderr)
+    if len(problems) > 30:
+        print(f"  ... and {len(problems) - 30} more", file=sys.stderr)
+    print("Remove them (or replace with [redacted]); if this is a false alarm: git commit --no-verify",
+          file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -37,7 +37,9 @@ The markers are HTML comments, so Obsidian and other Markdown previews don't sho
 - **In a template:** use a named block for text that should only be a default:
   `<!-- keep:my-name -->default text<!-- /keep:my-name -->`. New notes get the default. After that,
   whatever the note contains between those markers is kept. Named blocks can also sit inside a line.
-  `playlist.md` uses one for the **AI Full Description** line, so setting it to `[True]` sticks.
+  `playlist.md` uses one for the **AI Full Description** and **AI Video Description** lines, so the
+  values you set stick. Setting **AI Video Description** to `[False]` keeps crawlers/youtube-ai from
+  analysing that playlist's videos.
 - **Video notes:** adding or editing keep blocks doesn't count as editing the note, so a re-check can
   still refresh the rest of it. Changes outside keep blocks still make the sync leave the whole note
   alone.
@@ -45,6 +47,13 @@ The markers are HTML comments, so Obsidian and other Markdown previews don't sho
   note are moved into the full note.
 
 ## Rules
+
+- **Your own properties are kept.** Front matter properties the template doesn't write (for example
+  the `category:` added by crawlers/youtube-ai, or properties you add in Obsidian) survive every
+  rewrite of a note, and editing the front matter never counts as a hand edit.
+- **Keep the `video_id` front matter.** The `video_id: "..."` line at the top of `video.md` is the
+  only place the video's ID appears in a note's file. The sync uses it to recognise a note you renamed
+  or moved by hand.
 
 - **Keep the `ai-summary` flag lines.** In `playlist.md`, keep the line
   `- {{ name }}: [{{ value }}]`. The sync reads the flags back from that exact format
@@ -84,7 +93,9 @@ The markers are HTML comments, so Obsidian and other Markdown previews don't sho
     `owner_name`, `owner_url`.
   - Metadata: `availability`, `description`, `youtube_video_count`, `modified_date` (use
     `| date`), `view_count`, `first_seen_at`, `last_seen_at`.
-- **`videos`:** a list of `{position, title, url, channel, duration_seconds, note_link}`.
+- **`videos`:** a list of `{position, title, url, channel, duration_seconds, note_link}`, in
+  alphabetical order by title. `position` is the video's place in the YouTube playlist, and
+  `loop.index` is its number in the list.
   `note_link` is the relative link to the video's note, or empty when it has no note yet.
 - **`ai_flags`:** the `name: value` pairs of the `ai-summary` section.
 

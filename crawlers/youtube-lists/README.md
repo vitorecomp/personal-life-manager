@@ -39,8 +39,21 @@ keyring to override it, for example `chrome+basictext`.
 `run.sh` creates `.venv/` next to itself on the first run and installs `requirements.txt` into it.
 It upgrades them on every run, which keeps yt-dlp current when YouTube changes.
 
-The first run fetches details for every video at roughly a second or two each, so a large Watch
-Later list takes a while. `--details-limit` splits that work across runs.
+The first run fetches details for every video. Each takes several seconds, and 4 are fetched at a
+time by default, so a large Watch Later list still takes a while. `--details-limit` splits that work
+across runs. Each video's note is written as soon as its details arrive, and the playlist note when
+the playlist starts.
+
+### Unavailable videos report
+
+```bash
+./crawlers/youtube-lists/unavailable-report.py          # deleted, private... videos per playlist
+./crawlers/youtube-lists/unavailable-report.py --all    # include playlists without any
+```
+
+Prints a table per playlist (deleted or removed, private, not re-checked yet) from the database,
+without changing anything. It finds the database through `YOUTUBE_LISTS_DB` in `.env`, or through
+`--db`.
 
 ### Options
 
@@ -51,7 +64,9 @@ Later list takes a while. `--details-limit` splits that work across runs.
 | `--details-limit N` | Fetch details for at most N videos per run |
 | `--comments N` | Newest comments stored per video (default 20, 0 = none) |
 | `--refresh-days N` | Also re-fetch counts and comments of videos not checked for N days |
-| `--detail-delay S` | Pause between video requests (default 1 second) |
+| `--workers N` | Videos fetched at the same time (default 4; `YOUTUBE_LISTS_WORKERS` in `.env`) |
+| `--listing-workers N` | Playlists listed at the same time, ahead of the video workers (default 3) |
+| `--detail-delay S` | Pause each worker takes after a video request (default 1 second) |
 | `--templates-dir DIR` | Use templates from another folder |
 | `-o FILE.csv` | Also export every active playlist entry to CSV |
 | `--my-channel-id ID` | Override the "Created by me" channel detection |
@@ -63,14 +78,38 @@ The exit code is 1 if any playlist or video fetch failed. Those are retried on t
 
 ```
 <notes dir>/
-├── <Playlist>/
-│   ├── <Playlist>.md                  # playlist note
+├── <playlist>/
+│   ├── <playlist>.md                       # playlist note
 │   └── videos/
-│       ├── <Title> [<video id>].md     # full video note
-│       └── <Title> [<video id>]-ref.md # pointer to a full note owned by another playlist
+│       ├── <title>/                        # one folder per video
+│       │   ├── <title>.md                  # full video note (+ AI notes from crawlers/youtube-ai)
+│       │   └── ...                         # anything else you put here travels with the video
+│       └── <title>/
+│           └── <title>-ref.md              # pointer to a full note owned by another playlist
 └── removed/
-    └── <Playlist>/                     # notes of videos (or whole playlists) that left a playlist
+    └── <playlist>/                         # same layout, for videos (or whole playlists) that left
+        ├── <playlist>.md
+        └── videos/<title>/...
 ```
+
+When a video moves (to another playlist, into `removed/`, or back), its whole folder moves. If the
+destination folder already exists, the two are merged, and no file is ever overwritten. Relative links
+in moved notes are rewritten so they keep pointing at the same files.
+
+**Naming:** folder and file names are the kebab-cased title:
+`build/videos/how-to-rgb-8x8x8-led-cube-the-build/how-to-rgb-8x8x8-led-cube-the-build.md`.
+- **Characters:** accents are dropped (`ń` becomes `n`), and letters of other scripts are kept
+  (`강남-스타일`).
+- **Shared titles:** when two videos have the same title, the later one gets `-2`, `-3`... Names have
+  to be unique, because a video's folder can move to any playlist.
+- **Fixed names:** names are chosen once, so renaming a video or playlist on YouTube never renames its
+  folder.
+- **Unavailable videos:** a video that is private, deleted or otherwise unavailable on YouTube gets a
+  hidden folder (`.title/`), which Obsidian and file managers don't show. Playlist notes still list it,
+  linking only to YouTube. If a later re-check finds the video available again, the folder loses the
+  dot. Everything inside moves with it.
+- **Video ID:** it isn't in the name. It's in the note's front matter (`video_id: "zS5oZPJVh_o"`) and
+  in its Metadata section.
 
 - **Playlist note:** name, whether you created it, metadata, an `ai-summary` section with
   `summary: [False]` and `videos-ai-description: [False]` flags, and the video list linking to each
@@ -87,8 +126,13 @@ The exit code is 1 if any playlist or video fetch failed. Those are retried on t
 ## How runs stay incremental
 
 The database is the source of truth for what exists, which playlist owns each video's note, and
-where every note currently is. Each run works depth first: it handles one playlist completely,
-including membership changes, video details and notes, before starting the next.
+where every note currently is. Listing a playlist is a slow call of its own, so upcoming playlists
+are listed ahead of time, 3 at once (`--listing-workers`). They are still handled in their original
+order, so the playlist that owns a shared video's note never changes. As soon as a playlist is synced,
+its videos that need details go into one shared pool of workers (`--workers`, 4 by default). Like a Go channel, the pool keeps fetching across playlist boundaries, and while the next
+playlist is being listed, instead of waiting for each playlist to finish. Each video's note is written
+when its details arrive, and a playlist's note is rewritten when its last video is done. A video in
+several playlists is fetched once.
 
 - **Never refetched:** videos that already have details. A video shared by several playlists is
   fetched once.
@@ -111,9 +155,14 @@ including membership changes, video details and notes, before starting the next.
   - The intervals are set in `config.py`.
 - **Hand edits:**
   - A full note is only written when missing, so your edits are kept.
-  - A re-check rewrites a note only if it still matches what the script last wrote.
-  - If you rename or move a full note, it is found again by the `[video id]` in its file name and
+  - A re-check rewrites a note only if it still matches what the script last wrote. Front matter and
+    keep blocks don't count, and front matter properties the template doesn't write are kept.
+  - If you rename or move a full note, it is found again through the `video_id` in its front matter and
     put back where it belongs.
+- **Logged out:** the sync first checks that YouTube sees you as logged in, by reading Watch Later,
+  with 3 tries 10 seconds apart. If it still doesn't, it stops before changing anything, because
+  every private playlist would fail. A playlist that answers "does not exist" is retried once after
+  a short wait.
 - **One run at a time:** a lock file next to the database stops two runs from working on the same
   database at once.
 
@@ -125,7 +174,31 @@ including membership changes, video details and notes, before starting the next.
 | `video` | playlist entry (a video in two playlists has two rows) | position, title, channel, removal state |
 | `video_detail` | distinct video | description, counts, tags, chapters, comments, transcript, raw yt-dlp JSON, note owner and path |
 
-Older databases are upgraded automatically when opened.
+## Migrations
+
+Schema and layout changes live in numbered scripts in `migrations/`, not in the regular code:
+
+| Migration | Change |
+| :--- | :--- |
+| `0001_initial_schema` | playlist, video and video_detail tables |
+| `0002_playlist_metadata` | playlist metadata, owner, notes folder, created-by-me |
+| `0003_note_ownership` | which playlist owns each video's full note |
+| `0004_tracking_columns` | note paths and hashes, re-check scheduling, removal confirmation |
+| `0005_per_video_folders` | notes folder: one folder per video |
+| `0006_kebab_case_names` | notes folder: kebab-case names (paths in the database and links in notes updated) |
+| `0007_names_without_video_id` | notes folder: names without the video ID; the ID moves into each note's front matter |
+| `0008_flag_placeholder_details` | marks details saved from yt-dlp placeholders (private or removed videos) as unavailable and due for a re-check |
+
+- **Tracking:** applied migrations are recorded in the `schema_migrations` table, which youtube-ai
+  shares, using its own `component` value.
+- **Running:** `run.sh` runs `migrate.py` before every sync. The sync refuses to start on a database
+  with pending migrations.
+- **Running by hand:** use `.venv/bin/python migrate.py --db <db> --notes-dir <notes>`.
+
+To change the schema or the notes layout, add the next `NNNN_description.py` with a
+`migrate(conn, notes_dir)` function. It must leave a database that already has the change
+untouched, because databases created before migrations existed are brought up to date by running
+all of them.
 
 ## Templates
 
@@ -138,14 +211,16 @@ look. See [md-templates/README.md](md-templates/README.md) for the fields and he
 crawlers/youtube-lists/
 ├── run.sh                 reads .env, manages .venv, runs the CLI
 ├── youtube-lists.py       entry point
+├── migrate.py             applies pending migrations (run.sh calls it first)
+├── migrations/            numbered schema and notes-layout migrations
 ├── requirements.txt
 ├── md-templates/          editable note templates
 ├── cli.py                 arguments; starts a run under the lock
 ├── config.py              constants and re-check intervals
-├── pipeline/              run.py (depth-first run), details.py (video details, re-checks)
+├── pipeline/              run.py (the run), details.py (shared detail worker pool, re-checks)
 ├── youtube/               client.py (yt-dlp), subtitles.py
 ├── storage/               schema.py, playlists.py, videos.py, lock.py
-├── notes/                 templates.py, render.py, writer.py, reconcile.py, keep.py, paths.py
+├── notes/                 templates.py, render.py, writer.py, reconcile.py, keep.py, paths.py, migrate.py
 ├── exports/               csv_export.py
 └── utils/                 text.py
 ```

@@ -1,3 +1,7 @@
+---
+video_id: "{{ video.video_id }}"
+---
+
 # {{ video.title | md }}
 
 {% if video.unavailable_reason %}

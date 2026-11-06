@@ -3,6 +3,7 @@
 - **Created by me:** {{ playlist.created_by_me | yesno }}
 <!-- keep:ai-full-description -->
 - **AI Full Description:** [False]
+- **AI Video Description:** [True]
 <!-- /keep:ai-full-description -->
 
 ## Metadata
@@ -30,5 +31,5 @@
 ## Videos
 
 {% for video in videos %}
-{{ video.position }}. [{{ video.title | md }}]({{ video.note_link or video.url }}){% if video.note_link %} ([YouTube]({{ video.url }})){% endif %}{% if video.channel or video.duration_seconds %} - {{ [video.channel | md, video.duration_seconds | duration] | select | join(" | ") }}{% endif +%}
+{{ loop.index }}. [{{ video.title | md }}]({{ video.note_link or video.url }}){% if video.note_link %} ([YouTube]({{ video.url }})){% endif %}{% if video.channel or video.duration_seconds %} - {{ [video.channel | md, video.duration_seconds | duration] | select | join(" | ") }}{% endif +%}
 {% endfor %}

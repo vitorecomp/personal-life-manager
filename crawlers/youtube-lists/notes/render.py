@@ -10,8 +10,8 @@ from typing import Any, Dict, List
 from urllib.parse import quote
 
 from config import AI_FLAGS, VIDEOS_DIR
-from notes.keep import normalize
-from notes.paths import ref_file_name
+from notes.keep import normalize, normalize_with_front_matter
+from notes.paths import note_rel_path, ref_file_name, video_dir_name
 from notes.templates import render
 
 
@@ -21,8 +21,13 @@ def legacy_content_hash(text: str) -> str:
 
 
 def content_hash(text: str) -> str:
-    """Hash of a note ignoring what is inside keep blocks, so edits there never count as hand edits."""
+    """Hash of a note ignoring its front matter and keep blocks, so edits there never count as hand edits."""
     return hashlib.sha256(normalize(text).encode("utf-8")).hexdigest()
+
+
+def previous_content_hash(text: str) -> str:
+    """content_hash as it was before front matter was ignored (hashes stored back then still count)."""
+    return hashlib.sha256(normalize_with_front_matter(text).encode("utf-8")).hexdigest()
 
 
 def _load(row: sqlite3.Row, column: str) -> list:
@@ -66,7 +71,8 @@ def render_ref_note(video: sqlite3.Row) -> str:
         "video-ref.md",
         video=video_context(video),
         owner={"title": video["owner_title"], "folder": video["owner_folder"]},
-        full_note_link=f"../../{quote(video['owner_folder'])}/{VIDEOS_DIR}/{quote(video['note_file'])}",
+        full_note_link="../../../" + quote(note_rel_path(video["owner_folder"], video["note_file"],
+                                                         hidden=video["unavailable_reason"] is not None)),
     )
 
 
@@ -88,10 +94,10 @@ def render_playlist_note(playlist: sqlite3.Row, videos: List[sqlite3.Row], flags
     for video in videos:
         entry = {k: video[k] for k in video.keys()}
         entry["note_link"] = None
-        if video["note_file"]:
+        if video["note_file"] and video["unavailable_reason"] is None:  # hidden notes: YouTube link only
             is_owner = video["note_playlist_id"] in (None, playlist["id"])
             local = video["note_file"] if is_owner else ref_file_name(video["note_file"])
-            entry["note_link"] = f"{VIDEOS_DIR}/{quote(local)}"
+            entry["note_link"] = quote(f"{VIDEOS_DIR}/{video_dir_name(video['note_file'])}/{local}")
         entries.append(entry)
     return render(
         "playlist.md",

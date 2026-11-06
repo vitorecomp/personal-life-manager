@@ -16,19 +16,20 @@ Tables:
     video_detail  one row per distinct video (description, counts, tags, chapters,
                   latest comments, original-language transcript, raw JSON)
 
-Work is depth-first: for each playlist the script syncs its videos, then immediately fetches the full
-details of every video that has none yet, and writes the notes before moving to the next playlist.
-Videos already in video_detail are never fetched again, so repeat runs only do new work.
+Work flows like a channel: playlists are listed one after another, and as soon as a playlist is synced its
+videos needing details go into one shared pool of workers (--workers), which keeps fetching across playlist
+boundaries. Each video's note is written when its details arrive; a playlist's note is rewritten when its
+last video is done. Videos already in video_detail are never fetched again, so repeat runs only do new work.
 
 With --output-dir, each playlist gets <output-dir>/<playlist folder>/<playlist folder>.md and each
-video gets <output-dir>/_videos/<title> [<id>].md. The flags in a playlist's `ai-summary` section
+video gets <output-dir>/<playlist>/videos/<title>/<title>.md. The flags in a playlist's `ai-summary` section
 are never reset by a sync once they have been changed.
 
 Code lives in the modules next to this file:
     cli.py                 argument parsing; starts a run under the database lock
     config.py              shared constants and tuning knobs
-    pipeline/run.py        one sync run, depth first, plus the final reconciliation pass
-    pipeline/details.py    per-video detail fetching and due re-checks
+    pipeline/run.py        one sync run: playlists listed in turn, then a final reconciliation pass
+    pipeline/details.py    the shared detail worker pool (DetailPool) and due re-checks
     youtube/client.py      yt-dlp invocation (account feed, playlists, video metadata)
     youtube/subtitles.py   original-language subtitle selection and download
     storage/schema.py      schema, opening and upgrading the database
@@ -42,7 +43,8 @@ Code lives in the modules next to this file:
     notes/reconcile.py     moving notes when videos leave or return to playlists (removed/ folder)
     notes/paths.py         note locations and safe moves
     exports/csv_export.py  CSV export
-    utils/text.py          small text helpers
+    utils/text.py          small text helpers (incl. kebab-case names)
+    migrate.py + migrations/  schema and notes-layout migrations (run.sh applies them first)
 
 Examples:
     ./youtube-lists.py --browser firefox --db youtube.sqlite --output-dir notes/youtube

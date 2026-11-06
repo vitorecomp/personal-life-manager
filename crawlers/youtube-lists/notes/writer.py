@@ -5,11 +5,12 @@ Every rewrite of an existing note goes through keep.merge(), so text inside keep
 
 import os
 import sqlite3
+import unicodedata
 from typing import Dict, Optional
 
 from notes.keep import merge
-from notes.paths import move_note, note_rel_path, ref_file_name, removed_rel_path
-from notes.render import content_hash, legacy_content_hash, read_ai_flags, render_playlist_note, render_ref_note, render_video_note
+from notes.paths import move_note, move_video, note_rel_path, ref_file_name, removed_playlist_note_rel, removed_rel_path
+from notes.render import content_hash, legacy_content_hash, previous_content_hash, read_ai_flags, render_playlist_note, render_ref_note, render_video_note
 
 
 def write_video_notes(
@@ -40,10 +41,17 @@ def write_video_notes(
     for row in rows:
         is_owner = row["note_playlist_id"] in (None, playlist_id) or not row["owner_folder"]
         name = row["note_file"] if is_owner else ref_file_name(row["note_file"])
-        rel = note_rel_path(mine["folder"], name)
+        hidden = row["unavailable_reason"] is not None
+        rel = note_rel_path(mine["folder"], row["note_file"], name, hidden)
         path = os.path.join(output_dir, rel)
 
         if is_owner:
+            existing = row["note_path"]
+            if not os.path.exists(path) and existing and os.path.exists(os.path.join(output_dir, existing)):
+                # the note exists elsewhere (e.g. the video just became unavailable and its folder is now
+                # hidden): move it, with its whole folder, instead of writing a second copy
+                rel = move_video(output_dir, existing, rel)
+                path = os.path.join(output_dir, rel)
             if not os.path.exists(path):
                 content = render_video_note(row)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -62,9 +70,12 @@ def write_video_notes(
 
         content = render_ref_note(row)
         if not os.path.exists(path):
-            parked = removed_rel_path(mine["folder"], name)
-            if os.path.exists(os.path.join(output_dir, parked)):
-                move_note(output_dir, parked, rel)
+            other = note_rel_path(mine["folder"], row["note_file"], name, not hidden)  # visibility changed
+            parked = removed_rel_path(mine["folder"], row["note_file"], name, hidden)
+            for candidate in (other, parked):
+                if os.path.exists(os.path.join(output_dir, candidate)):
+                    move_video(output_dir, candidate, rel)
+                    break
         if os.path.exists(path):
             with open(path, encoding="utf-8") as fh:
                 current = fh.read()
@@ -96,13 +107,20 @@ def refresh_video_note(conn: sqlite3.Connection, output_dir: str, video_id: str)
     new = merge(current, render_video_note(row))
     if current == new:
         return "unchanged"
-    if row["note_hash"] is not None and row["note_hash"] not in (content_hash(current), legacy_content_hash(current)):
+    accepted = (content_hash(current), previous_content_hash(current), legacy_content_hash(current))
+    if row["note_hash"] is not None and row["note_hash"] not in accepted:
         return "edited"
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(new)
     with conn:
         conn.execute("UPDATE video_detail SET note_hash = ? WHERE video_id = ?", (content_hash(new), video_id))
     return "updated"
+
+
+def sort_key(title: str) -> str:
+    """Alphabetical order that ignores case and accents ('Árvore' sorts with 'arvore')."""
+    text = unicodedata.normalize("NFKD", title or "")
+    return "".join(ch for ch in text if not unicodedata.combining(ch)).casefold().strip()
 
 
 def write_playlist_notes(conn: sqlite3.Connection, output_dir: str, only_id: Optional[str] = None) -> Dict[str, int]:
@@ -116,17 +134,18 @@ def write_playlist_notes(conn: sqlite3.Connection, output_dir: str, only_id: Opt
     for playlist in conn.execute(query, params).fetchall():
         videos = conn.execute(
             """
-            SELECT v.*, d.note_file, d.note_playlist_id FROM video v
+            SELECT v.*, d.note_file, d.note_playlist_id, d.unavailable_reason FROM video v
             LEFT JOIN video_detail d ON d.video_id = v.video_id
             WHERE v.playlist_id = ? AND v.removed_at IS NULL ORDER BY v.position
             """,
             (playlist["id"],),
         ).fetchall()
+        videos = sorted(videos, key=lambda v: (sort_key(v["title"]), v["position"]))  # alphabetical
         folder = os.path.join(output_dir, playlist["folder"])
         path = os.path.join(folder, f"{playlist['folder']}.md")
         if not os.path.exists(path):
             # A playlist that came back: take its parked note (with its ai-summary flags) instead of starting over.
-            parked = removed_rel_path(playlist["folder"], f"{playlist['folder']}.md")
+            parked = removed_playlist_note_rel(playlist["folder"])
             if os.path.exists(os.path.join(output_dir, parked)):
                 move_note(output_dir, parked, f"{playlist['folder']}/{playlist['folder']}.md")
         content = render_playlist_note(playlist, videos, read_ai_flags(path))

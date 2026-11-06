@@ -5,9 +5,12 @@ The database decides everything:
   * video_detail.note_playlist_id says which playlist owns the video's full note,
   * video_detail.note_path says where that full note currently is on disk.
 
+Each video's notes live in a folder of their own (see notes/paths.py); moving a note moves its whole
+folder, so AI notes and your own files travel with it.
+
 Rules (nothing is ever deleted except a redundant "-ref" stub inside the playlist that owns the note):
-  * A full note that was renamed or moved by hand is found again by the " [video id].md" ending of its
-    file name and put back where the database says it belongs.
+  * A full note that was renamed or moved by hand is found again (by its file name, or by the video_id
+    in its front matter) and put back where the database says it belongs.
   * A playlist flagged as removed has its own note and "-ref" notes parked under removed/ as well.
   * Owner still has the video: nothing moves.
   * Owner dropped it but another playlist still has it: the full note moves to that playlist (the one
@@ -23,28 +26,61 @@ import re
 import sqlite3
 from typing import Dict, List, Optional
 
-from config import VIDEOS_DIR
 from notes.keep import append_blocks, extract_blocks
-from notes.paths import is_removed_path, move_note, note_rel_path, ref_file_name, removed_rel_path
+from notes.paths import (
+    is_removed_path,
+    move_note,
+    move_video,
+    note_rel_path,
+    prune_empty_dirs,
+    ref_file_name,
+    removed_playlist_note_rel,
+    removed_rel_path,
+)
 
 
-def find_notes_by_id(output_dir: str) -> Dict[str, List[str]]:
-    """Index every full video note under output_dir by the video id in its file name."""
-    index: Dict[str, List[str]] = {}
-    for root, _dirs, files in os.walk(output_dir):
-        for name in files:
-            match = re.search(r"\[([^\]]+)\]\.md$", name)  # "-ref" notes end in "]-ref.md" and never match
-            if match:
-                rel = os.path.relpath(os.path.join(root, name), output_dir).replace(os.sep, "/")
-                index.setdefault(match.group(1), []).append(rel)
-    return index
+FRONT_MATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+
+
+def index_notes(output_dir: str) -> List[tuple]:
+    """(file name, relative path) of every Markdown file under output_dir."""
+    return [
+        (name, os.path.relpath(os.path.join(root, name), output_dir).replace(os.sep, "/"))
+        for root, _dirs, files in os.walk(output_dir) for name in files if name.endswith(".md")
+    ]
+
+
+def front_matter_video_id(path: str) -> Optional[str]:
+    """The video_id in a full video note's front matter (None for AI notes, -ref notes and others)."""
+    if path.endswith("-ref.md"):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            head = fh.read(2048)
+    except OSError:
+        return None
+    match = FRONT_MATTER_RE.match(head)
+    if not match or "\nai_kind:" in f"\n{match.group(1)}":
+        return None
+    found = re.search(r'^video_id:\s*"?([^"\n]+)"?\s*$', match.group(1), re.MULTILINE)
+    return found.group(1).strip() if found else None
+
+
+def find_note(index: List[tuple], output_dir: str, video_id: str, note_file: str) -> List[str]:
+    """Full notes of a video that is no longer where the database says: same file name elsewhere, the
+    older id-in-name patterns, or any note whose front matter carries the video's id."""
+    by_name = [rel for name, rel in index
+               if name == note_file or name.endswith(f"-{video_id}.md") or name.endswith(f"[{video_id}].md")]
+    if by_name:
+        return by_name
+    return [rel for _name, rel in index if front_matter_video_id(os.path.join(output_dir, rel)) == video_id]
 
 
 def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]:
     conn.row_factory = sqlite3.Row
     stats = {"promoted": 0, "removed": 0, "restored": 0, "refs_removed": 0, "stubs_dropped": 0,
-             "adopted": 0, "playlists_parked": 0}
-    index: Optional[Dict[str, List[str]]] = None
+             "adopted": 0, "playlists_parked": 0, "visibility": 0}
+    index: Optional[List[tuple]] = None
     folders = {
         row["id"]: row["folder"] for row in conn.execute("SELECT id, folder FROM playlist WHERE folder IS NOT NULL")
     }
@@ -52,7 +88,11 @@ def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]
     def exists(rel_path: str) -> bool:
         return os.path.exists(os.path.join(output_dir, rel_path))
 
-    for detail in conn.execute("SELECT video_id, note_file, note_playlist_id, note_path FROM video_detail").fetchall():
+    rows = conn.execute(
+        "SELECT video_id, note_file, note_playlist_id, note_path, unavailable_reason FROM video_detail"
+    ).fetchall()
+    for detail in rows:
+        hidden = detail["unavailable_reason"] is not None  # unavailable on YouTube: hidden folder
         owner = detail["note_playlist_id"]
         active = [
             row[0]
@@ -65,22 +105,22 @@ def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]
         ]
         if active:
             new_owner = owner if owner in active else active[0]
-            target = note_rel_path(folders[new_owner], detail["note_file"])
+            target = note_rel_path(folders[new_owner], detail["note_file"], hidden=hidden)
         elif owner in folders:
             new_owner = owner
-            target = removed_rel_path(folders[owner], detail["note_file"])
+            target = removed_rel_path(folders[owner], detail["note_file"], hidden=hidden)
         else:
             continue
 
         current = detail["note_path"]
         adopted = False
         if current is None and owner in folders:
-            guess = note_rel_path(folders[owner], detail["note_file"])
-            current = guess if exists(guess) else None
+            guesses = [note_rel_path(folders[owner], detail["note_file"], hidden=h) for h in (hidden, not hidden)]
+            current = next((g for g in guesses if exists(g)), None)
         if current is not None and not exists(current):
             if index is None:
-                index = find_notes_by_id(output_dir)
-            found = sorted(index.get(detail["video_id"], []), key=is_removed_path)
+                index = index_notes(output_dir)
+            found = sorted(find_note(index, output_dir, detail["video_id"], detail["note_file"]), key=is_removed_path)
             current = found[0] if found else None
             if current:
                 stats["adopted"] += 1
@@ -88,12 +128,15 @@ def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]
 
         if current is not None:
             parked = is_removed_path(current)
-            if active and current != target:
-                target = move_note(output_dir, current, target)
+            if current != target and os.path.dirname(os.path.dirname(current)) == os.path.dirname(os.path.dirname(target)):
+                target = move_video(output_dir, current, target)  # only visibility changed (hidden <-> shown)
+                stats["visibility"] += 1
+            elif active and current != target:
+                target = move_video(output_dir, current, target)
                 if not adopted:
                     stats["restored" if parked else "promoted"] += 1
             elif not active and not parked:
-                target = move_note(output_dir, current, target)
+                target = move_video(output_dir, current, target)
                 stats["removed"] += 1
             else:
                 target = current
@@ -109,7 +152,7 @@ def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]
     # "-ref" notes: park the ones whose playlist dropped the video; drop stubs made pointless by a promotion.
     memberships = conn.execute(
         """
-        SELECT v.playlist_id, v.removed_at, d.note_file, d.note_playlist_id
+        SELECT v.playlist_id, v.removed_at, d.note_file, d.note_playlist_id, d.unavailable_reason
         FROM video v JOIN video_detail d ON d.video_id = v.video_id
         """
     ).fetchall()
@@ -117,20 +160,25 @@ def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]
         folder = folders.get(row["playlist_id"])
         if not folder:
             continue
-        stub = note_rel_path(folder, ref_file_name(row["note_file"]))
+        hidden = row["unavailable_reason"] is not None
+        stub = note_rel_path(folder, row["note_file"], ref_file_name(row["note_file"]), hidden)
+        other = note_rel_path(folder, row["note_file"], ref_file_name(row["note_file"]), not hidden)
+        if not exists(stub) and exists(other):
+            move_video(output_dir, other, stub)  # the video became (un)available: follow the visibility
+            stats["visibility"] += 1
         if not exists(stub):
             continue
         if row["removed_at"] is not None:
-            move_note(output_dir, stub, removed_rel_path(folder, ref_file_name(row["note_file"])))
+            move_video(output_dir, stub, removed_rel_path(folder, row["note_file"], ref_file_name(row["note_file"]), hidden))
             stats["refs_removed"] += 1
         elif row["playlist_id"] == row["note_playlist_id"]:
             # This playlist now holds the full note, so its "-ref" note is redundant. Keep blocks written
             # in it move into the full note first; if there is no full note to take them, park the stub.
             with open(os.path.join(output_dir, stub), encoding="utf-8") as fh:
                 kept = extract_blocks(fh.read())
-            full = note_rel_path(folder, row["note_file"])
+            full = note_rel_path(folder, row["note_file"], hidden=hidden)
             if kept and not exists(full):
-                move_note(output_dir, stub, removed_rel_path(folder, ref_file_name(row["note_file"])))
+                move_video(output_dir, stub, removed_rel_path(folder, row["note_file"], ref_file_name(row["note_file"]), hidden))
                 stats["refs_removed"] += 1
                 continue
             if kept:
@@ -140,6 +188,7 @@ def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]
                 with open(full_path, "w", encoding="utf-8") as fh:
                     fh.write(append_blocks(text, kept))
             os.remove(os.path.join(output_dir, stub))
+            prune_empty_dirs(output_dir, os.path.dirname(os.path.join(output_dir, stub)))
             stats["stubs_dropped"] += 1
 
     # Playlists that no longer exist: park their own note and tidy up the folders they leave empty.
@@ -147,11 +196,11 @@ def reconcile_notes(conn: sqlite3.Connection, output_dir: str) -> Dict[str, int]
         folder = playlist["folder"]
         own_note = f"{folder}/{folder}.md"
         if exists(own_note):
-            move_note(output_dir, own_note, removed_rel_path(folder, f"{folder}.md"))
+            move_note(output_dir, own_note, removed_playlist_note_rel(folder))
             stats["playlists_parked"] += 1
-        for empty in (os.path.join(output_dir, folder, VIDEOS_DIR), os.path.join(output_dir, folder)):
-            try:
-                os.rmdir(empty)
-            except OSError:
-                pass
+        playlist_dir = os.path.join(output_dir, folder)
+        for root, dirs, _files in os.walk(playlist_dir, topdown=False):
+            for name in dirs:
+                prune_empty_dirs(output_dir, os.path.join(root, name))
+        prune_empty_dirs(output_dir, playlist_dir)
     return stats

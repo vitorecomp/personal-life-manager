@@ -34,9 +34,51 @@ def _section_heading(text: str, position: int) -> Optional[str]:
     return heading
 
 
+FRONT_MATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+
+
+def split_front_matter(text: str) -> Tuple[List[str], str]:
+    """(front matter lines, rest of the note); no front matter gives ([], text)."""
+    match = FRONT_MATTER_RE.match(text)
+    if not match:
+        return [], text
+    return match.group(1).split("\n"), text[match.end():]
+
+
+def _key(line: str) -> Optional[str]:
+    match = re.match(r"^([A-Za-z0-9_-]+)\s*:", line)
+    return match.group(1) if match else None
+
+
+def merge_front_matter(old: str, new: str) -> str:
+    """Keep front matter properties of the existing note that the template doesn't write (e.g. a category
+    added by crawlers/youtube-ai, or properties you added in Obsidian). Template properties win."""
+    old_lines, _ = split_front_matter(old)
+    new_lines, body = split_front_matter(new)
+    if not old_lines:
+        return new
+    new_keys = {_key(line) for line in new_lines if _key(line)}
+    extra, keeping = [], False
+    for line in old_lines:
+        key = _key(line)
+        if key is not None:
+            keeping = key not in new_keys
+        if keeping:
+            extra.append(line)  # includes indented continuation lines of a kept property
+    if not extra:
+        return new
+    return "---\n" + "\n".join(new_lines + extra) + "\n---\n" + body
+
+
 def normalize(text: str) -> str:
-    """The text without keep blocks and with whitespace collapsed, so adding, removing or editing keep
+    """The note without front matter and keep blocks, whitespace collapsed: editing properties or keep
     blocks (and the blank lines around them) never counts as a change to the note."""
+    _lines, body = split_front_matter(text)
+    return " ".join(BLOCK_RE.sub(" ", body).split())
+
+
+def normalize_with_front_matter(text: str) -> str:
+    """How notes were normalized before front matter was ignored (to accept hashes stored back then)."""
     return " ".join(BLOCK_RE.sub(" ", text).split())
 
 
@@ -53,7 +95,9 @@ def append_blocks(text: str, blocks: List[str]) -> str:
 
 
 def merge(old: str, new: str) -> str:
-    """Carry the keep blocks of the existing note (`old`) into a freshly rendered one (`new`)."""
+    """Carry the keep blocks and extra front matter properties of the existing note (`old`) into a freshly
+    rendered one (`new`)."""
+    new = merge_front_matter(old, new)
     old_blocks = _blocks(old)
     if not old_blocks:
         return new

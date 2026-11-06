@@ -8,6 +8,7 @@ from typing import List, Optional
 from pipeline.run import run
 from notes.templates import TemplateSetupError, configure as configure_templates
 from storage.lock import RunLocked, run_lock
+from storage.schema import MigrationsPending
 from config import PLAYLISTS_FEED_URL
 
 
@@ -61,7 +62,22 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "Missing transcripts and unavailable videos are re-checked on their own schedule regardless.",
     )
     parser.add_argument(
-        "--detail-delay", type=float, default=1.0, help="Seconds to wait between video detail requests."
+        "--workers",
+        type=int,
+        default=4,
+        help="How many videos to fetch details for at the same time (default 4).",
+    )
+    parser.add_argument(
+        "--listing-workers",
+        type=int,
+        default=3,
+        help="Playlists listed at the same time, ahead of the detail workers (default 3).",
+    )
+    parser.add_argument(
+        "--detail-delay",
+        type=float,
+        default=1.0,
+        help="Seconds each worker waits after a video detail request (default 1).",
     )
     parser.add_argument(
         "--feed-url",
@@ -82,6 +98,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         with run_lock(args.db):
             return run(args)
-    except (RunLocked, TemplateSetupError) as exc:
+    except (RunLocked, TemplateSetupError, MigrationsPending) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

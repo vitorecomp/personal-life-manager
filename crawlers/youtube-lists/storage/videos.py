@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
-from utils.text import safe_name
+from utils.text import video_slug
 from config import (
     RAW_JSON_DROP,
     RETRY_OLD_INTERVAL_DAYS,
@@ -32,6 +32,22 @@ def pending_videos(conn: sqlite3.Connection, playlist_id: str) -> List[sqlite3.R
 
 def json_or_none(value: object) -> Optional[str]:
     return json.dumps(value, ensure_ascii=False, default=str) if value else None
+
+
+def allocate_note_file(conn: sqlite3.Connection, video_id: str, title: str) -> str:
+    """Note file name for a new video: its kebab-case title, with -2, -3... when another video already
+    uses that name (names must be unique, because a video's folder can move to any playlist)."""
+    base = video_slug(title)
+    taken = {
+        row[0] for row in conn.execute(
+            "SELECT note_file FROM video_detail WHERE video_id <> ? AND (note_file = ? OR note_file LIKE ?)",
+            (video_id, f"{base}.md", f"{base}-%.md"),
+        )
+    }
+    name, counter = f"{base}.md", 2
+    while name in taken:
+        name, counter = f"{base}-{counter}.md", counter + 1
+    return name
 
 
 def store_video_detail(
@@ -102,7 +118,7 @@ def store_video_detail(
         "transcript": transcript,
         "raw_json": json_or_none(raw),
         "unavailable_reason": unavailable_reason,
-        "note_file": f"{safe_name(title, video_id)} [{video_id}].md",
+        "note_file": allocate_note_file(conn, video_id, title) if not exists else "",  # kept on refresh
         "note_playlist_id": playlist_id,
         "now": now,
         "attempts": 0 if transcript else 1,

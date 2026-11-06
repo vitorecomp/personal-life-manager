@@ -64,4 +64,6 @@ Every crawler emits structured items following this standard schema:
 
 | Crawler | What it captures |
 | :--- | :--- |
+| [`youtube-clean/`](youtube-clean/README.md) | Removes deleted and private videos from your YouTube playlists (dry run unless `--apply`) |
+| [`youtube-ai/`](youtube-ai/README.md) | Gemini notes per video: everything it teaches and everything it shows (needs youtube-lists) |
 | [`youtube-lists/`](youtube-lists/README.md) | All your YouTube playlists and their videos (metadata, comments, original-language transcripts) into SQLite + Markdown notes |

@@ -1,9 +1,11 @@
-"""One full sync run, depth first: playlist by playlist, then a final reconciliation pass."""
+"""One full sync run: playlists listed and synced in turn while their videos flow through one shared
+detail pool (pipeline.details.DetailPool), then a final reconciliation pass."""
 
 import argparse
 import os
 import shutil
 import sys
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -16,12 +18,12 @@ from youtube.client import (
     YtDlpError,
     build_base_cmd,
     build_detail_cmd,
-    detect_my_channel_id,
+    check_logged_in,
     fetch_playlist,
     list_playlists,
 )
 from config import SPECIAL_PLAYLISTS
-from pipeline.details import sync_details
+from pipeline.details import DetailPool
 
 
 def report_reconcile(stats: Dict[str, int]) -> None:
@@ -33,6 +35,7 @@ def report_reconcile(stats: Dict[str, int]) -> None:
         "stubs_dropped": "redundant ref notes dropped",
         "adopted": "renamed/moved notes found again by video id",
         "playlists_parked": "removed playlists' notes moved to removed/",
+        "visibility": "folders hidden or shown (video unavailable / available again)",
     }
     done = [f"{stats[key]} {text}" for key, text in labels.items() if stats.get(key)]
     if done:
@@ -76,9 +79,16 @@ def run(args: argparse.Namespace) -> int:
         print("error: no playlists found - are you logged in to YouTube in that browser?", file=sys.stderr)
         return 1
 
-    my_channel_id = args.my_channel_id or detect_my_channel_id(base_cmd)
-    if not my_channel_id:
-        print("warning: could not determine your channel ID; 'Created by me' will be Unknown.", file=sys.stderr)
+    detected = check_logged_in(base_cmd)
+    if detected is None:
+        print(
+            "error: YouTube doesn't see you as logged in (Watch Later can't be read), so your private playlists\n"
+            "would all fail. Open youtube.com in your browser, make sure you're signed in, then run again.\n"
+            "Nothing was changed.",
+            file=sys.stderr,
+        )
+        return 1
+    my_channel_id = args.my_channel_id or detected
 
     now = datetime.now(timezone.utc).isoformat()
     conn = open_db(args.db)
@@ -87,50 +97,20 @@ def run(args: argparse.Namespace) -> int:
     detail_cmd = build_detail_cmd(args)
     failed = []
 
-    for playlist in playlists:
-        try:
-            fetched = fetch_playlist(base_cmd, playlist)
-        except YtDlpError as exc:
-            failed.append(playlist["title"])
-            print(f"warning: skipped '{playlist['title']}': {exc}", file=sys.stderr)
-            continue
-        owner_id = fetched["meta"]["owner_channel_id"]
-        if playlist["id"] in SPECIAL_PLAYLISTS:
-            created_by_me: Optional[bool] = True
-        elif my_channel_id and owner_id:
-            created_by_me = owner_id == my_channel_id
-        else:
-            created_by_me = None
-        complete = looks_complete(fetched["meta"]["youtube_video_count"], len(fetched["videos"]))
-        counts = sync_playlist(
-            conn, playlist["id"], fetched["title"], fetched["meta"], created_by_me, fetched["videos"], now, complete
-        )
-        for key, value in counts.items():
-            totals[key] += value
-        print(
-            f"{fetched['title']}: {len(fetched['videos'])} videos "
-            f"(+{counts['added']} new, -{counts['removed']} removed)"
-        )
-        if counts["unconfirmed"]:
-            print(
-                f"  {counts['unconfirmed']} videos missing from an incomplete-looking fetch; "
-                "they are only flagged removed if still missing next run"
-            )
-
-        # Videos that left or returned to playlists: move their notes before anything new is written.
-        # The playlist note is written straight away (videos without a note yet link to YouTube) and
-        # rewritten once its videos are done; each video note is written as soon as its details arrive.
+    def playlist_done(playlist_id: str) -> None:
         if args.output_dir:
-            report_reconcile(reconcile_notes(conn, args.output_dir))
-            write_video_notes(conn, args.output_dir, playlist["id"])
-            write_playlist_notes(conn, args.output_dir, only_id=playlist["id"])
+            write_video_notes(conn, args.output_dir, playlist_id)
+            write_playlist_notes(conn, args.output_dir, only_id=playlist_id)
 
-        # Depth first: finish this playlist's videos and notes before starting the next playlist.
-        if not args.no_details:
-            sync_details(conn, args, detail_cmd, playlist["id"], budget, now, totals)
-        if args.output_dir:
-            write_video_notes(conn, args.output_dir, playlist["id"])
-            write_playlist_notes(conn, args.output_dir, only_id=playlist["id"])
+    pool = None if args.no_details else DetailPool(conn, args, detail_cmd, now, totals, budget, playlist_done)
+    try:
+        sync_all_playlists(args, conn, base_cmd, playlists, my_channel_id, now, totals, failed, pool)
+        if pool:
+            pool.finish()  # the remaining queued videos, after the last playlist was listed
+    except BaseException:
+        if pool:
+            pool.cancel()
+        raise
 
     # Failed playlists are still "seen" so a transient error never flags them as removed.
     gone = mark_missing_playlists(conn, [p["id"] for p in playlists], now)
@@ -161,3 +141,72 @@ def run(args: argparse.Namespace) -> int:
         f"({totals['detail_failures']} failed, will retry next run)"
     )
     return 1 if failed or totals["detail_failures"] else 0
+
+
+def sync_all_playlists(args, conn, base_cmd, playlists, my_channel_id, now, totals, failed, pool) -> None:
+    """Sync every playlist, feeding their videos into the shared detail pool.
+
+    Listing a playlist is a slow yt-dlp call of its own, so the next ones are listed ahead of time,
+    --listing-workers at once; their results are still handled in the original order (which decides,
+    for a video in several playlists, which one holds its note). While waiting for a listing, finished
+    video details keep being handled, so the detail workers never wait on the listing.
+    """
+    listing = ThreadPoolExecutor(max_workers=max(1, args.listing_workers), thread_name_prefix="listing")
+    futures = [listing.submit(fetch_playlist, base_cmd, playlist) for playlist in playlists]
+    try:
+        for playlist, future in zip(playlists, futures):
+            while not future.done():
+                if pool and pool.futures:
+                    wait([future, *pool.futures], timeout=1, return_when=FIRST_COMPLETED)
+                    pool.drain()
+                else:
+                    wait([future], timeout=1)
+            if pool:
+                pool.drain()
+            sync_one_playlist(args, conn, playlist, future, my_channel_id, now, totals, failed, pool)
+    finally:
+        listing.shutdown(wait=False, cancel_futures=True)
+
+
+def sync_one_playlist(args, conn, playlist, future, my_channel_id, now, totals, failed, pool) -> None:
+    """List results of one playlist: store its videos, move notes, queue its videos for details."""
+    try:
+        fetched = future.result()
+    except YtDlpError as exc:
+        failed.append(playlist["title"])
+        print(f"warning: skipped '{playlist['title']}': {exc}", file=sys.stderr)
+        return
+    owner_id = fetched["meta"]["owner_channel_id"]
+    if playlist["id"] in SPECIAL_PLAYLISTS:
+        created_by_me: Optional[bool] = True
+    elif my_channel_id and owner_id:
+        created_by_me = owner_id == my_channel_id
+    else:
+        created_by_me = None
+    complete = looks_complete(fetched["meta"]["youtube_video_count"], len(fetched["videos"]))
+    counts = sync_playlist(
+        conn, playlist["id"], fetched["title"], fetched["meta"], created_by_me, fetched["videos"], now, complete
+    )
+    for key, value in counts.items():
+        totals[key] += value
+    print(
+        f"{fetched['title']}: {len(fetched['videos'])} videos "
+        f"(+{counts['added']} new, -{counts['removed']} removed)"
+    )
+    if counts["unconfirmed"]:
+        print(
+            f"  {counts['unconfirmed']} videos missing from an incomplete-looking fetch; "
+            "they are only flagged removed if still missing next run"
+        )
+
+    # Videos that left or returned to playlists: move their notes before anything new is written.
+    # The playlist note is written straight away (videos without a note yet link to YouTube) and
+    # rewritten once its videos are done; each video note is written as soon as its details arrive.
+    if args.output_dir:
+        report_reconcile(reconcile_notes(conn, args.output_dir))
+        write_video_notes(conn, args.output_dir, playlist["id"])
+        write_playlist_notes(conn, args.output_dir, only_id=playlist["id"])
+
+    # Queue this playlist's videos; the workers start on them while the next playlist is listed.
+    if pool:
+        pool.enqueue(playlist["id"])

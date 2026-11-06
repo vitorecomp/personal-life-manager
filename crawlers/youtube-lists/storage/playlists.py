@@ -3,7 +3,7 @@
 import sqlite3
 from typing import Dict, List, Optional
 
-from utils.text import safe_name
+from utils.text import kebab
 from youtube.client import playlist_url
 from config import CONFIRM_RUNS, PLACEHOLDER_TITLES, REMOVED_DIR, SPECIAL_PLAYLISTS
 
@@ -16,14 +16,14 @@ def allocate_folder(conn: sqlite3.Connection, playlist_id: str, title: str) -> s
     row = conn.execute("SELECT folder FROM playlist WHERE id = ?", (playlist_id,)).fetchone()
     if row and row[0]:
         return row[0]
-    folder = safe_name(title, playlist_id)
-    if folder.lower() == REMOVED_DIR:
-        folder = f"{folder} ({playlist_id[-6:]})"
+    folder = kebab(title) or f"playlist-{playlist_id.lower()}"
+    if folder == REMOVED_DIR:
+        folder = f"{folder}-{playlist_id[-6:].lower()}"
     taken = conn.execute(
         "SELECT 1 FROM playlist WHERE folder = ? COLLATE NOCASE AND id <> ?", (folder, playlist_id)
     ).fetchone()
     if taken:
-        folder = f"{folder} ({playlist_id[-6:]})"
+        folder = f"{folder}-{playlist_id[-6:].lower()}"
     return folder
 
 

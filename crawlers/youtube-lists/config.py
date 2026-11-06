@@ -49,7 +49,7 @@ RAW_JSON_DROP = {
 PERMANENT_FAILURES = (
     "private video", "video unavailable", "this video is not available", "no longer available",
     "has been removed", "removed by the uploader", "account associated with this video has been terminated",
-    "members-only", "this video is unavailable", "this video has been",
+    "members-only", "this video is unavailable", "this video has been", "this video is private",
 )
 
 

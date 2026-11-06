@@ -1,13 +1,25 @@
 """Small text helpers shared by the database and note writers."""
 
 import re
+import unicodedata
 from typing import List, Optional
 
 
-def safe_name(text: str, fallback: str) -> str:
-    name = re.sub(r'[\x00-\x1f/\\:*?"<>|]', "-", text)
-    name = re.sub(r"\s+", " ", name).strip(" .-")[:80].strip(" .-")
-    return name or fallback
+def kebab(text: str, max_length: int = 60) -> str:
+    """'How To RGB 8x8x8 LED CUBE - The BUILD!' -> 'how-to-rgb-8x8x8-led-cube-the-build'.
+
+    Accents are dropped (ń -> n); letters of other scripts are kept (강남 스타일 -> 강남-스타일).
+    """
+    text = "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)).lower()
+    slug = re.sub(r"[\W_]+", "-", text).strip("-")
+    if len(slug) > max_length:
+        slug = slug[:max_length].rsplit("-", 1)[0] or slug[:max_length]
+    return slug
+
+
+def video_slug(title: str) -> str:
+    """Base folder and note name of a video (made unique by storage.videos.allocate_note_file)."""
+    return kebab(title) or "video"
 
 
 def md_escape(text: str) -> str:

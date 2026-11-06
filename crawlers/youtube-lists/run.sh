@@ -10,6 +10,7 @@ set -euo pipefail
 #   YOUTUBE_LISTS_DB         SQLite database path
 #   YOUTUBE_LISTS_NOTES_DIR  folder for the playlist and video notes
 #   YOUTUBE_MY_CHANNEL_ID    optional, for "Created by me"
+#   YOUTUBE_LISTS_WORKERS    optional, videos fetched at the same time (default 4)
 # Relative paths are relative to the project root.
 #
 # Usage: ./run.sh [browser] [extra youtube-lists.py args]
@@ -39,6 +40,41 @@ absolute() {
     if [[ "$1" == /* ]]; then printf '%s' "$1"; else printf '%s' "$ROOT_DIR/$1"; fi
 }
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    cat <<'MANUAL'
+youtube-lists: sync your YouTube playlists into SQLite and Markdown notes
+
+  Every playlist gets <notes>/<playlist>/<playlist>.md, every video its own folder
+  <notes>/<playlist>/videos/<title>/<title>.md with metadata, description, chapters, latest comments
+  and the transcript in the video's original language. Runs are incremental; nothing is deleted
+  (videos that leave every playlist move to removed/, unavailable ones get a hidden .folder).
+
+USAGE
+  ./crawlers/youtube-lists/run.sh [browser] [options]
+
+  ./crawlers/youtube-lists/run.sh                        browser and paths from .env
+  ./crawlers/youtube-lists/run.sh firefox                use another browser's login cookies
+  ./crawlers/youtube-lists/run.sh --details-limit 200    fetch at most 200 video details this run
+  ./crawlers/youtube-lists/run.sh --workers 8            8 videos at a time (default 4)
+  ./crawlers/youtube-lists/run.sh --listing-workers 5    list 5 playlists at a time (default 3)
+  ./crawlers/youtube-lists/unavailable-report.py         table of deleted/private videos per playlist
+
+SETTINGS (project root .env)
+  YOUTUBE_COOKIES_BROWSER (or YOUTUBE_COOKIES_FILE), YOUTUBE_LISTS_DB, YOUTUBE_LISTS_NOTES_DIR,
+  YOUTUBE_MY_CHANNEL_ID, YOUTUBE_LISTS_WORKERS
+
+FILES
+  md-templates/   the note templates (editable)
+  README.md       the full documentation
+MANUAL
+    if [[ -x "$VENV_DIR/bin/python" ]]; then
+        echo
+        echo "ALL OPTIONS (the browser and paths are passed by run.sh)"
+        "$VENV_DIR/bin/python" "$SCRIPT_DIR/youtube-lists.py" --help | sed -n '/^options:/,$p' | tail -n +2
+    fi
+    exit 0
+fi
+
 BROWSER="$(env_value YOUTUBE_COOKIES_BROWSER)"
 if [[ $# -gt 0 && "$1" != -* ]]; then
     BROWSER="$1"
@@ -48,6 +84,7 @@ COOKIES_FILE="$(env_value YOUTUBE_COOKIES_FILE)"
 DB_FILE="$(env_value YOUTUBE_LISTS_DB)"
 NOTES_DIR="$(env_value YOUTUBE_LISTS_NOTES_DIR)"
 MY_CHANNEL_ID="$(env_value YOUTUBE_MY_CHANNEL_ID)"
+WORKERS="$(env_value YOUTUBE_LISTS_WORKERS)"
 
 missing=()
 [[ -z "$BROWSER" && -z "$COOKIES_FILE" ]] && missing+=("YOUTUBE_COOKIES_BROWSER (or YOUTUBE_COOKIES_FILE)")
@@ -78,6 +115,7 @@ else
 fi
 EXTRA_ARGS=()
 [[ -n "$MY_CHANNEL_ID" ]] && EXTRA_ARGS+=(--my-channel-id "$MY_CHANNEL_ID")
+[[ -n "$WORKERS" ]] && EXTRA_ARGS+=(--workers "$WORKERS")
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     echo "==> Creating virtualenv at $VENV_DIR"
@@ -89,6 +127,9 @@ echo "==> Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install --quiet --upgrade -r "$SCRIPT_DIR/requirements.txt"
 
 mkdir -p "$(dirname "$DB_FILE")" "$NOTES_DIR"
+
+echo "==> Applying database migrations"
+"$VENV_DIR/bin/python" "$SCRIPT_DIR/migrate.py" --db "$DB_FILE" --notes-dir "$NOTES_DIR"
 
 echo "==> Syncing playlists using $AUTH_LABEL"
 # Clear the variables the Python CLI reads as defaults, so only the arguments above decide.

@@ -38,7 +38,10 @@ personal-life-manager/
 │   └── logs/              # Historical daily logs
 ├── scripts/               # Automation scripts (e.g. syncing Obsidian markdown vault)
 ├── sub-systems/           # Standalone bots and game automations (auto-players, satisfatory-plan)
-├── database/              # [GITIGNORED] Local clone of Obsidian Second Brain markdown vault
+├── data/                  # [GITIGNORED] Local data
+│   ├── second-brain/      # Clone of the Obsidian Second Brain markdown vault
+│   ├── knowledge-data/    # Crawler output (Markdown notes)
+│   └── database/          # SQLite files used by the crawlers
 ├── mise.toml              # Tool version manager configuration (Go)
 ├── podman-compose.yml     # Root orchestrator for multi-container stack
 └── README.md              # Project overview and quickstart
@@ -144,7 +147,7 @@ python hermes/main.py --query "Second brain architecture"
 
 From the repository root:
 ```bash
-# Synchronize Obsidian vault into gitignored database/ directory
+# Synchronize Obsidian vault into gitignored data/second-brain/ directory
 ./scripts/download_brain.sh
 ```
 
@@ -200,8 +203,8 @@ From the repository root:
 ## 🔒 6. Privacy, Security & Git Conventions
 
 1. **Obsidian Vault Privacy**:
-   - The `database/` directory holds private Obsidian notes and markdown files. It is strictly listed in `.gitignore`.
-   - **Never** add, track, or commit files from `database/` to Git.
+   - The `data/` directory holds private Obsidian notes, crawler output and SQLite files. It is strictly listed in `.gitignore`.
+   - **Never** add, track, or commit files from `data/` to Git.
 2. **Environment & Secrets**:
    - Environment secrets belong in `.env`.
    - `.env` and `.env.*` are ignored by Git. Only commit `.env.example`.

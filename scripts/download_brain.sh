@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="$ROOT_DIR/.env"
-TARGET_DIR="$ROOT_DIR/database"
+TARGET_DIR="$ROOT_DIR/data/second-brain"
 
 # Output colors
 GREEN='\033[0;32m'
@@ -38,19 +38,26 @@ if [[ -z "$REPO_URL" ]]; then
 fi
 
 echo -e "${GREEN}==> Repository URL detected:${NC} $REPO_URL"
-echo -e "${GREEN}==> Target database directory:${NC} $TARGET_DIR"
+echo -e "${GREEN}==> Target second brain directory:${NC} $TARGET_DIR"
 
 if [[ -d "$TARGET_DIR/.git" ]]; then
     echo -e "${YELLOW}==> Existing git repository found in $TARGET_DIR. Pulling latest updates...${NC}"
     git -C "$TARGET_DIR" pull --ff-only
-    echo -e "${GREEN}==> Database successfully updated!${NC}"
+    echo -e "${GREEN}==> Second brain successfully updated!${NC}"
 elif [[ -d "$TARGET_DIR" ]]; then
+    # The folder already exists (it holds the .gitkeep tracked by this repository), so git clone
+    # can't target it: clone the history aside, move it in and check the files out in place.
     echo -e "${YELLOW}==> Directory $TARGET_DIR already exists but is not a git repository.${NC}"
-    echo -e "${YELLOW}==> Initializing and pulling into database...${NC}"
-    git clone "$REPO_URL" "$TARGET_DIR"
-    echo -e "${GREEN}==> Database successfully cloned!${NC}"
+    echo -e "${YELLOW}==> Initializing and pulling into second-brain...${NC}"
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
+    git clone --no-checkout "$REPO_URL" "$TMP_DIR/repo"
+    mv "$TMP_DIR/repo/.git" "$TARGET_DIR/.git"
+    git -C "$TARGET_DIR" checkout -- .
+    echo ".gitkeep" >> "$TARGET_DIR/.git/info/exclude"
+    echo -e "${GREEN}==> Second brain successfully cloned!${NC}"
 else
     echo -e "${YELLOW}==> Cloning Obsidian Second Brain repository...${NC}"
     git clone "$REPO_URL" "$TARGET_DIR"
-    echo -e "${GREEN}==> Database successfully cloned to $TARGET_DIR!${NC}"
+    echo -e "${GREEN}==> Second brain successfully cloned to $TARGET_DIR!${NC}"
 fi

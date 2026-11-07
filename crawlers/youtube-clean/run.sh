@@ -37,7 +37,7 @@ USAGE
   ./crawlers/youtube-clean/run.sh --limit 20 --apply       at most 20 removals this run
 
 NOTES
-  - Every removal is logged first in database/database_files/youtube-clean-log.csv.
+  - Every removal is logged first in data/database/youtube-clean-log.csv.
   - Liked videos are skipped unless --include-liked (removing from it means un-liking).
   - Playlists you saved from other people can't be edited and are skipped.
   - Afterwards run ./crawlers/youtube-lists/run.sh so your notes follow.

@@ -15,7 +15,7 @@ Important architectural fact: the Go backend does **not** use Postgres or Redis 
 
 The stack is orchestrated by the root `podman-compose.yml` (postgres, redis, personal-backend, personal-frontend). `infra-deploy/` holds the infra-only compose definitions.
 
-`database/` is a gitignored local clone of a private Obsidian vault (synced via `./scripts/download_brain.sh`). Never track or commit anything under it.
+`data/` is gitignored local data with three folders: `second-brain/` (clone of the private Obsidian vault, synced via `./scripts/download_brain.sh`), `knowledge-data/` (crawler output) and `database/` (SQLite files). Never track or commit anything under it.
 
 ## Commands
 
@@ -46,7 +46,7 @@ npm run lint              # eslint
 ```bash
 python hermes/main.py --status
 python hermes/main.py --query "..."
-./scripts/download_brain.sh   # sync Obsidian vault into database/ (needs OBSIDIAN_BRAIN_REPO_URL in .env)
+./scripts/download_brain.sh   # sync Obsidian vault into data/second-brain/ (needs OBSIDIAN_BRAIN_REPO_URL in .env)
 ```
 
 Before finishing a change, run the relevant check: `make test` for backend, `npm run build` or `npm run lint` for frontend.

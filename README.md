@@ -46,7 +46,7 @@ flowchart TD
 | **`personal-system/`** | Full-stack platform (Golang API + Next.js UI) to administer time, tasks, and servers, plus goals and routines. | [View Personal System](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/README.md) |
 | **`sub-systems/`** | Standalone sub-systems, automated bots, and game tools (`auto-players`, `satisfatory-plan`). | [Explore Sub-Systems](file:///home/vitor/workspace/personal/personal-life-manager/sub-systems/README.md) |
 | **`scripts/`** | Helper scripts (e.g. syncing Obsidian Second Brain GitHub repository). | [Explore Scripts](file:///home/vitor/workspace/personal/personal-life-manager/scripts/README.md) |
-| **`database/`** *(gitignored)* | Local clone of your Obsidian Second Brain markdown vault. | Synced via `./scripts/download_brain.sh` |
+| **`data/`** *(gitignored)* | Local data: `second-brain/` (clone of the Obsidian vault), `knowledge-data/` (crawler output) and `database/` (SQLite files). | `second-brain/` synced via `./scripts/download_brain.sh` |
 
 ---
 
@@ -61,7 +61,7 @@ flowchart TD
 # Copy and configure environment variables
 cp .env.example .env
 
-# Clone or pull your Obsidian Second Brain into database/
+# Clone or pull your Obsidian Second Brain into data/second-brain/
 ./scripts/download_brain.sh
 ```
 

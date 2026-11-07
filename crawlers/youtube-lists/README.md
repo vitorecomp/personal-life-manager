@@ -16,8 +16,8 @@ Settings live in the project root `.env` (documented in the root `.env.example`)
 | :--- | :--- |
 | `YOUTUBE_COOKIES_BROWSER` | Browser you are logged in to YouTube with (`chrome`, `firefox`, `chromium`, `brave`, ...) |
 | `YOUTUBE_COOKIES_FILE` | Optional: a Netscape `cookies.txt` instead of a browser (takes precedence) |
-| `YOUTUBE_LISTS_DB` | SQLite database path, e.g. `database/database_files/youtube-lists.sqlite` |
-| `YOUTUBE_LISTS_NOTES_DIR` | Notes folder, e.g. `database/lists/youtube` |
+| `YOUTUBE_LISTS_DB` | SQLite database path, e.g. `data/database/youtube-lists.sqlite` |
+| `YOUTUBE_LISTS_NOTES_DIR` | Notes folder, e.g. `data/knowledge-data/lists/youtube` |
 | `YOUTUBE_MY_CHANNEL_ID` | Optional: your channel ID for "Created by me" (auto-detected otherwise) |
 
 Relative paths are relative to the project root. An environment variable with the same name

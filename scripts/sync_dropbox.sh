@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Syncs with Dropbox what git does not keep: everything in database/ except the Markdown notes
-# (the SQLite database, logs, any other files). The notes are versioned in git and pushed to GitHub
-# (see database/.gitignore), so the two never overlap.
+# Syncs with Dropbox what git does not keep: everything in data/ except the Markdown notes
+# (data/database/ with the SQLite databases and logs, any other files). The notes in
+# data/second-brain/ and data/knowledge-data/ are versioned in git and pushed to GitHub
+# (see their .gitignore), so the two never overlap.
 #
 # Usage:
-#   ./scripts/sync_dropbox.sh                 push: make Dropbox match database/ (default)
-#   ./scripts/sync_dropbox.sh pull            bring files that are newer on Dropbox into database/
+#   ./scripts/sync_dropbox.sh                 push: make Dropbox match data/ (default)
+#   ./scripts/sync_dropbox.sh pull            bring files that are newer on Dropbox into data/
 #   ./scripts/sync_dropbox.sh check           compare both sides without changing anything
 #   add --dry-run to see what would happen, --force to sync even while a crawler is running
 #
@@ -17,7 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="$ROOT_DIR/.env"
-LOCAL_DIR="$ROOT_DIR/database"
+LOCAL_DIR="$ROOT_DIR/data"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -34,7 +35,7 @@ env_value() {
     printf '%s' "${value:-$default}"
 }
 
-usage() { sed -n '4,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '4,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 ACTION="push"
 DRY_RUN=()
@@ -72,15 +73,15 @@ if [[ ! -d "$LOCAL_DIR" ]]; then
     echo -e "${RED}$LOCAL_DIR does not exist.${NC} Run ./scripts/download_brain.sh first." >&2
     exit 1
 fi
-if [[ "$ACTION" == "push" ]] && [[ -z "$(find "$LOCAL_DIR" -type f -not -path "$LOCAL_DIR/.git/*" \
-        -not -name "*.md" -not -name ".gitignore" -print -quit)" ]]; then
+if [[ "$ACTION" == "push" ]] && [[ -z "$(find "$LOCAL_DIR" -type f -not -path "*/.git/*" \
+        -not -name "*.md" -not -name ".gitignore" -not -name ".gitkeep" -print -quit)" ]]; then
     echo -e "${RED}$LOCAL_DIR has no files for Dropbox; refusing to push (it would empty the Dropbox copy).${NC}" >&2
     exit 1
 fi
 
 # A crawler writing the SQLite database right now would give Dropbox a half-written copy.
 if [[ "$ACTION" != "check" && $FORCE -eq 0 ]]; then
-    for lock in "$LOCAL_DIR"/database_files/*.lock; do
+    for lock in "$LOCAL_DIR"/database/*.lock; do
         [[ -e "$lock" ]] || continue
         if ! flock -n "$lock" true 2>/dev/null; then
             echo -e "${RED}A crawler is running (lock held: $(basename "$lock")).${NC}" >&2
@@ -91,9 +92,10 @@ if [[ "$ACTION" != "check" && $FORCE -eq 0 ]]; then
 fi
 
 FILTERS=(
-    # What git keeps (database/.gitignore lets only Markdown in) stays out of Dropbox:
-    --exclude "*.md" --exclude "/.gitignore"
-    --exclude "/.git/**"          # GitHub keeps the history of the notes
+    # What git keeps (each repository's .gitignore lets only Markdown in) stays out of Dropbox:
+    --exclude "*.md" --exclude ".gitignore"
+    --exclude ".git/**"           # GitHub keeps the history of the notes
+    --exclude ".gitkeep"          # keeps the data/ folders in this repository
     --exclude "*.lock"            # crawler run locks
     --exclude "*.sqlite-journal" --exclude "*.sqlite-wal" --exclude "*.sqlite-shm"
 )

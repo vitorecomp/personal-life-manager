@@ -37,7 +37,7 @@ Settings come from the project root `.env`: `YOUTUBE_COOKIES_BROWSER` (your YouT
   playlist", 50 videos per request, authenticated with your browser's cookies. `yt-dlp` reads the
   cookies and signs the requests.
 - **Log:** every removal, or failed removal, is appended to
-  `database/database_files/youtube-clean-log.csv`, with the playlist, video ID, position and reason.
+  `data/database/youtube-clean-log.csv`, with the playlist, video ID, position and reason.
   If a private video becomes public again, you can find it there and re-add it.
 
 This is YouTube's internal API, not the official one. The official YouTube Data API can't edit Watch

@@ -106,7 +106,7 @@ func (fs *FileStore) seedInitialData() {
 	task1 := models.Task{
 		ID:               "task-1",
 		Title:            "Configure Obsidian Second Brain Synchronization",
-		Description:      "Run ./scripts/download_brain.sh and connect private vault to database/",
+		Description:      "Run ./scripts/download_brain.sh and connect private vault to data/second-brain/",
 		Status:           models.TaskStatusInProgress,
 		Priority:         models.TaskPriorityHigh,
 		Project:          "Second Brain",

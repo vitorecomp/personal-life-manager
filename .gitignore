@@ -3,8 +3,11 @@
 .env.*
 !.env.example
 
-# Second Brain local database (Obsidian repository)
-database/
+# Local data (second brain clone, crawler output, SQLite files); only the folder skeleton is tracked
+/data/*
+!/data/*/
+/data/*/*
+!/data/*/.gitkeep
 
 # Dependency directories
 node_modules/

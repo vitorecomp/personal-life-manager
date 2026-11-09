@@ -18,8 +18,9 @@ flowchart TD
         RD[("Redis Queue")]
     end
 
-    subgraph Brain["3. Intelligence Core (hermes/)"]
-        HERMES["Hermes Engine\n(Embedding, LLM Synthesis, Search API)"]
+    subgraph Brain["3. Intelligence Core (Hermes Agent container)"]
+        HERMES["Hermes Agent (Nous Research)\nGemini, memory, skills"]
+        VAULT[("data/second-brain\nObsidian vault (GitHub)")]
     end
 
     subgraph LifeOps["4. Personal Execution"]
@@ -28,9 +29,10 @@ flowchart TD
 
     CR --> RD
     SCH --> RD
-    RD --> HERMES
-    HERMES <--> PG
-    PS <--> HERMES
+    CR --> KD[("data/knowledge-data\ncrawler notes")]
+    HERMES <--> VAULT
+    KD -. read-only .-> HERMES
+    PS -. planned .-> HERMES
 ```
 
 ---
@@ -41,12 +43,11 @@ flowchart TD
 | :--- | :--- | :--- |
 | **`crawlers/`** | Web scrapers, RSS ingestion, bookmark synchronizers, and content fetchers. | [Explore Crawlers](file:///home/vitor/workspace/personal/personal-life-manager/crawlers/README.md) |
 | **`documentation/`** | System architecture, data flow diagrams, and Second Brain methodology. | [View Docs](file:///home/vitor/workspace/personal/personal-life-manager/documentation/README.md) |
-| **`hermes/`** | Core engine: LLM orchestration, semantic search, vector indexing, and assistant API. | [Explore Hermes](file:///home/vitor/workspace/personal/personal-life-manager/hermes/README.md) |
 | **`infra-deploy/`** | Docker Compose configurations (Postgres/pgvector, Redis), environment templates, and deployment scripts. | [View Deploy Specs](file:///home/vitor/workspace/personal/personal-life-manager/infra-deploy/README.md) |
 | **`personal-system/`** | Full-stack platform (Golang API + Next.js UI) to administer time, tasks, and servers, plus goals and routines. | [View Personal System](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/README.md) |
 | **`sub-systems/`** | Standalone sub-systems, automated bots, and game tools (`auto-players`, `satisfatory-plan`). | [Explore Sub-Systems](file:///home/vitor/workspace/personal/personal-life-manager/sub-systems/README.md) |
 | **`scripts/`** | Helper scripts (e.g. syncing Obsidian Second Brain GitHub repository). | [Explore Scripts](file:///home/vitor/workspace/personal/personal-life-manager/scripts/README.md) |
-| **`data/`** *(gitignored)* | Local data: `second-brain/` (clone of the Obsidian vault), `knowledge-data/` (crawler output) and `database/` (SQLite files). | `second-brain/` synced via `./scripts/download_brain.sh` |
+| **`data/`** *(gitignored)* | Local data: `second-brain/` (clone of the Obsidian vault), `knowledge-data/` (crawler output) and `database/` (SQLite files, Hermes Agent state in `hermes-mds/`). | `second-brain/` synced via `./scripts/download_brain.sh` |
 
 ---
 
@@ -75,6 +76,46 @@ podman-compose ps
 ```
 
 Access the dashboard at [http://localhost:3000](http://localhost:3000) and API at [http://localhost:8080](http://localhost:8080).
+
+### 4. Hermes Agent (AI over your second brain)
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research runs as the `hermes`
+service, using the official image. It reads and writes the vault in `data/second-brain/` (mounted at
+`/vault`) and can read the crawler notes in `data/knowledge-data/` (mounted read-only at `/knowledge`).
+Its own state (config, memory, sessions, skills) lives in `data/database/hermes-mds/` and goes to
+Dropbox with `./scripts/sync_dropbox.sh`. The model is Gemini, using `GEMINI_API_KEY` from `.env`;
+the key is passed as an environment variable and never stored in `hermes-mds/`.
+
+```bash
+podman-compose up -d hermes                               # start it
+podman exec -it hermes /opt/hermes/.venv/bin/hermes       # chat in the terminal
+podman-compose stop hermes                                # stop it before syncing Dropbox
+git -C data/second-brain diff                             # review its edits before committing
+```
+
+To chat from Telegram, create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`), get your
+numeric user ID from [@userinfobot](https://t.me/userinfobot), set `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_ALLOWED_USERS` in `.env` and restart with `podman-compose up -d hermes`. It uses polling,
+so no port has to be opened.
+
+To let it manage Notion, create an internal integration at
+[notion.so/my-integrations](https://notion.so/my-integrations), set `NOTION_API_KEY` in `.env`,
+share the pages or databases it may use with the integration (page menu → **Connect to**) and
+restart with `podman-compose up -d hermes`.
+
+The dashboard is at [http://localhost:9119](http://localhost:9119) (this machine only). The model
+is set in `data/database/hermes-mds/config.yaml`.
+
+### 5. Obsidian in the browser (same vault)
+The `obsidian` service runs Obsidian ([linuxserver/obsidian](https://docs.linuxserver.io/images/docker-obsidian/))
+with `data/second-brain/` mounted at `/vault`, so you and Hermes edit the same notes.
+
+```bash
+podman-compose up -d obsidian
+```
+
+Open [https://localhost:3010](https://localhost:3010) (accept the self-signed certificate), choose
+**Open folder as vault** and pick `/vault`. It is bound to localhost only, since it is a full remote
+desktop; to reach it from another machine, use an SSH tunnel (`ssh -L 3010:localhost:3010 <host>`).
 
 ---
 

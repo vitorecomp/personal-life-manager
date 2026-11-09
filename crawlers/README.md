@@ -6,7 +6,7 @@ The **Crawlers** module is responsible for capturing raw information from extern
 
 ## 🎯 Purpose & Scope
 
-Crawlers automatically extract, normalize, and deliver content to **Hermes** for processing, indexing, and storage. Examples of data sources include:
+Crawlers automatically extract, normalize, and deliver content into `data/` (SQLite in `data/database/`, Markdown notes in `data/knowledge-data/`), where the **Hermes Agent** can read it. Examples of data sources include:
 - Web articles & blog posts (read-it-later / bookmarks)
 - RSS/Atom feeds
 - Social media threads & saved posts
@@ -22,7 +22,7 @@ flowchart LR
     Source["Data Sources\n(Web, RSS, APIs)"] --> Crawler["Crawler Worker"]
     Crawler --> Normalizer["Data Normalizer\n(Markdown / Metadata)"]
     Normalizer --> Queue["Ingestion Buffer\n(Redis / File Queue)"]
-    Queue --> Hermes["Hermes\n(Processing & Indexing)"]
+    Queue --> Notes["data/knowledge-data\n(read by the Hermes Agent)"]
 ```
 
 ---

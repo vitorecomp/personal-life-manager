@@ -22,7 +22,7 @@ dist/
 build/
 *.egg-info/
 bin/
-server
+personal-system/backend/server
 personal-system/backend/data/*.json
 
 # Logs

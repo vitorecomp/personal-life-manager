@@ -132,7 +132,7 @@ func (fs *FileStore) seedInitialData() {
 	task3 := models.Task{
 		ID:               "task-3",
 		Title:            "Scaffold Second Brain Core Architecture",
-		Description:      "Set up crawlers, hermes, infra-deploy, and root README",
+		Description:      "Set up crawlers, Hermes Agent, infra-deploy, and root README",
 		Status:           models.TaskStatusDone,
 		Priority:         models.TaskPriorityHigh,
 		Project:          "Second Brain",

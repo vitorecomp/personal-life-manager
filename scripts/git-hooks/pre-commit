@@ -7,7 +7,7 @@ Blocks (in the lines being added, so it stays fast on large commits):
   - files that hold secrets or data: .env, private keys, cookie files, rclone.conf, OAuth client files, databases
 Placeholders (AKIA...EXAMPLE, sk-xxxxxxxx...) are allowed. To commit anyway: git commit --no-verify
 
-Installed for this repository and for the notes repositories in data/ with:  git config core.hooksPath scripts/git-hooks
+Installed for this repository and for data/second-brain/ with:  git config core.hooksPath scripts/git-hooks
 """
 
 import os

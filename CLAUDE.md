@@ -8,14 +8,14 @@ A detailed contributor guide lives in [AGENTS.md](AGENTS.md) (module responsibil
 
 A polyglot monorepo for a personal "Second Brain" platform. Two largely independent halves:
 
-1. **Knowledge pipeline** (mostly scaffolding today): `crawlers/` (Python) will push normalized documents into Redis; `hermes/` (Python) will consume them, embed into PostgreSQL + pgvector, and expose semantic search. `hermes/main.py` is currently a CLI stub (`--status`, `--query`).
+1. **Knowledge pipeline**: `crawlers/` (Python) write SQLite and Markdown notes into `data/`. The AI layer is [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous Research), run from its official image as the `hermes` service in `podman-compose.yml`. It is not code in this repo: it mounts `data/second-brain/` (vault, read-write at `/vault`), `data/knowledge-data/` (read-only at `/knowledge`) and keeps its state in `data/database/hermes-mds/` (`/opt/data`). Model: Gemini via `GEMINI_API_KEY` from the root `.env`, passed as an env var so it is never written into `hermes-mds/` (which syncs to Dropbox).
 2. **Personal system** (fully implemented): `personal-system/backend` (Go 1.24, stdlib-only REST API on :8080) + `personal-system/frontend` (Next.js 16 / React 19 / Tailwind v4 dashboard on :3000) for tasks, time tracking, and server health monitoring.
 
-Important architectural fact: the Go backend does **not** use Postgres or Redis — it persists everything to a single JSON file via `internal/storage/file_store.go` (path from the `DATA_FILE` env var, default `data/store.json`). Postgres/pgvector and Redis exist for the hermes/crawlers pipeline.
+Important architectural fact: the Go backend does **not** use Postgres or Redis — it persists everything to a single JSON file via `internal/storage/file_store.go` (path from the `DATA_FILE` env var, default `data/store.json`). Postgres/pgvector and Redis are reserved for the crawlers pipeline; nothing consumes them yet.
 
 The stack is orchestrated by the root `podman-compose.yml` (postgres, redis, personal-backend, personal-frontend). `infra-deploy/` holds the infra-only compose definitions.
 
-`data/` is gitignored local data with three folders: `second-brain/` (clone of the private Obsidian vault, synced via `./scripts/download_brain.sh`), `knowledge-data/` (crawler output) and `database/` (SQLite files). Never track or commit anything under it.
+`data/` is gitignored local data with three folders: `second-brain/` (clone of the private Obsidian vault, synced via `./scripts/download_brain.sh`), `knowledge-data/` (crawler output) and `database/` (SQLite files, plus `hermes-mds/` with the Hermes Agent state). Never track or commit anything under it.
 
 ## Commands
 
@@ -42,10 +42,12 @@ npm run build             # production build (use as the verification check)
 npm run lint              # eslint
 ```
 
-### Hermes / vault sync (repo root)
+### Hermes Agent / vault sync (repo root)
 ```bash
-python hermes/main.py --status
-python hermes/main.py --query "..."
+podman-compose up -d hermes
+podman exec -it hermes /opt/hermes/.venv/bin/hermes   # chat
+podman-compose stop hermes                            # stop before ./scripts/sync_dropbox.sh
+podman-compose up -d obsidian                         # Obsidian on the same vault → https://localhost:3010
 ./scripts/download_brain.sh   # sync Obsidian vault into data/second-brain/ (needs OBSIDIAN_BRAIN_REPO_URL in .env)
 ```
 

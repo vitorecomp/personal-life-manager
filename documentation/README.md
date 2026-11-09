@@ -16,7 +16,7 @@ Welcome to the central documentation hub for the **Personal Life Manager** Secon
 | Directory | Role | Description |
 | :--- | :--- | :--- |
 | [`crawlers/`](file:///home/vitor/workspace/personal/personal-life-manager/crawlers) | **Capture** | Web scrapers, RSS ingestion, bookmark sync, and external data feeds. |
-| [`hermes/`](file:///home/vitor/workspace/personal/personal-life-manager/hermes) | **Process & Synthesize** | Core engine: LLM orchestration, semantic search, vector indexing, query API. |
+| `hermes` service ([`podman-compose.yml`](file:///home/vitor/workspace/personal/personal-life-manager/podman-compose.yml)) | **Process & Synthesize** | Hermes Agent (Nous Research): AI agent over the Obsidian vault in `data/second-brain/`. |
 | [`personal-system/`](file:///home/vitor/workspace/personal/personal-life-manager/personal-system) | **Organize & Act** | Daily routines, habit tracking, life metrics, goals, and personal knowledge logs. |
 | [`schedulers/`](file:///home/vitor/workspace/personal/personal-life-manager/schedulers) | **Automate** | Scheduled background jobs, cron tasks, automated routines, and game/life automation. |
 | [`infra-deploy/`](file:///home/vitor/workspace/personal/personal-life-manager/infra-deploy) | **Deploy & Run** | Docker compose, environment variables, local databases, and deployments. |

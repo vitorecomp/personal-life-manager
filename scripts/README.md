@@ -25,14 +25,15 @@ Clones or updates your private/public Obsidian Second Brain GitHub repository in
 > The target `data/` folder is listed in `.gitignore` to prevent committing your personal knowledge base into this system repository.
 
 ### 2. `sync_dropbox.sh`
-Syncs with Dropbox **what git doesn't keep**: everything in `data/` except the Markdown notes. That
-means the SQLite databases, logs and any other files. The notes are versioned in git and pushed to
-GitHub (the `.gitignore` of each notes repository lets only `.md` files in), so the two never overlap:
+Syncs with Dropbox **what git doesn't keep**: everything in `data/` except the second brain's Markdown
+notes. That means the SQLite databases, logs, the crawler output in `knowledge-data/` (notes included)
+and any other files. The second brain's notes are versioned in git and pushed to GitHub (its
+`.gitignore` lets only `.md` files in), so the two never overlap:
 
 | Where | What |
 | :--- | :--- |
-| GitHub (`data/second-brain/`, `data/knowledge-data/` git repositories) | the `.md` notes and their history |
-| Dropbox (`second-brain/`) | everything else: `database/` (SQLite databases, logs), any non-Markdown file |
+| GitHub (`data/second-brain/` git repository) | the second brain `.md` notes and their history |
+| Dropbox (`second-brain/`) | everything else: `database/` (SQLite databases, logs, the Hermes Agent state in `hermes-mds/`), `knowledge-data/` (crawler output), any non-Markdown file of `second-brain/` |
 
 #### Setup (once)
 ```bash
@@ -54,14 +55,15 @@ Optional `.env` settings: `DROPBOX_REMOTE` (the rclone remote name, default `dro
 - **Push keeps old versions:** files that a push changes or deletes on Dropbox are kept in
   `second-brain-versions/<date-time>` there.
 - **Pull never deletes:** it only copies files that are newer on Dropbox into `data/`.
-- **Not while a crawler runs:** it refuses while a crawler is writing the database, unless you pass
-  `--force`, so Dropbox never gets a half-written copy.
+- **Not while a crawler or Hermes runs:** it refuses while a crawler is writing the database or the
+  `hermes` container is up (stop it with `podman-compose stop hermes`), unless you pass `--force`, so
+  Dropbox never gets a half-written copy.
 - **No empty pushes:** it refuses to push when `data/` has nothing for Dropbox.
-- **Left out:** the notes and `.gitignore` (they're in git), `.git`, lock files and SQLite's temporary
-  files.
+- **Left out:** the second brain notes and `.gitignore` (they're in git), `.git`, lock files, SQLite's temporary
+  files and `database/hermes-mds/.env`.
 
 ### 3. `git-hooks/pre-commit`
-A safety check run before every commit, in this repository and in the notes repositories in `data/`. It refuses a commit
+A safety check run before every commit, in this repository and in `data/second-brain/`. It refuses a commit
 that would add any of these:
 
 - **Credential-looking strings:** Google, AWS, OpenAI-style, GitHub and Slack keys, and private keys.
@@ -77,6 +79,5 @@ It is enabled per clone (git doesn't version this setting). After cloning, run:
 ```bash
 git config core.hooksPath scripts/git-hooks                                # this repository
 git -C data/second-brain config core.hooksPath ../../scripts/git-hooks     # the second brain
-git -C data/knowledge-data config core.hooksPath ../../scripts/git-hooks   # the crawler notes
 ```
 

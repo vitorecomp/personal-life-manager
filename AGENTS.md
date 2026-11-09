@@ -15,7 +15,7 @@ The **Personal Life Manager** is a modular, automated **Second Brain** platform 
 The architecture is guided by the **CODE** methodology (**Capture, Organize, Distill, Express**) adapted for automated systems and AI agents:
 - **Capture**: Automated ingestion workers (`crawlers/`) and manual inputs.
 - **Organize**: Structured life operations (`personal-system/`) and markdown taxonomy.
-- **Distill**: LLM summarization and vector semantic search (`hermes/`).
+- **Distill**: the Hermes Agent (Nous Research) container working over the Obsidian vault.
 - **Express**: Actionable task execution, time blocks, and routine reviews.
 
 ---
@@ -28,7 +28,6 @@ This repository is organized as a polyglot monorepo with distinct module boundar
 personal-life-manager/
 ├── crawlers/              # Web scrapers, RSS ingestion, and content fetchers (Python)
 ├── documentation/         # System architecture, data flow, and methodology docs
-├── hermes/                # Core AI engine: vector indexing, LLM orchestration, search API (Python)
 ├── infra-deploy/          # Compose definitions (PostgreSQL + pgvector, Redis) & deploy scripts
 ├── personal-system/       # Life operations full-stack application & markdown trackers
 │   ├── backend/           # Lightweight Golang REST API (Tasks, Time, Server health)
@@ -41,7 +40,7 @@ personal-life-manager/
 ├── data/                  # [GITIGNORED] Local data
 │   ├── second-brain/      # Clone of the Obsidian Second Brain markdown vault
 │   ├── knowledge-data/    # Crawler output (Markdown notes)
-│   └── database/          # SQLite files used by the crawlers
+│   └── database/          # SQLite files used by the crawlers, hermes-mds/ (Hermes Agent state)
 ├── mise.toml              # Tool version manager configuration (Go)
 ├── podman-compose.yml     # Root orchestrator for multi-container stack
 └── README.md              # Project overview and quickstart
@@ -53,7 +52,7 @@ personal-life-manager/
 | :--- | :--- | :--- | :--- |
 | **`personal-system/backend`** | Go 1.24 (`net/http`) | High-performance REST API for task workflows, timer/time sessions, and concurrent TCP/HTTP server health probing. | `cmd/server/main.go`, `Makefile` |
 | **`personal-system/frontend`** | Next.js 16 (App Router), React 19, TypeScript 5, Tailwind CSS v4 | Interactive administrative UI dashboard for tasks, stopwatch/time blocking, and server monitoring. | `src/app/page.tsx`, `src/lib/api.ts` |
-| **`hermes`** | Python 3 | Intelligence core: document embeddings, pgvector retrieval, LLM summarization, and query interface. | `hermes/main.py` |
+| **`hermes`** (service) | Hermes Agent, official image | AI agent (Gemini) over the vault in `data/second-brain/`; state in `data/database/hermes-mds/`. Not code in this repo. | `podman-compose.yml` (`hermes` service) |
 | **`crawlers`** | Python 3 | Background data collectors for RSS, web bookmarks, and articles emitting standardized JSON schemas. | `crawlers/template_crawler.py` |
 | **`infra-deploy`** | Compose / Podman / Docker | PostgreSQL 16 (`pgvector/pgvector:pg16`), Redis 7 (`redis:7-alpine`), and container configs. | `infra-deploy/docker-compose.yml` |
 | **`sub-systems`** | Node.js / Python / Shell | Standalone automation sub-systems (e.g., game bots, calculation tools). | `sub-systems/satisfatory-plan/` |
@@ -132,15 +131,18 @@ npm run build
 npm run lint
 ```
 
-### 4.4. Intelligence Core (Hermes)
+### 4.4. Intelligence Core (Hermes Agent)
 
-Working directory: `hermes` (or project root)
+From the repository root:
 ```bash
-# Check service status
-python hermes/main.py --status
+# Start the agent (official nousresearch/hermes-agent image)
+podman-compose up -d hermes
 
-# Execute a semantic search query
-python hermes/main.py --query "Second brain architecture"
+# Chat with it in the terminal
+podman exec -it hermes /opt/hermes/.venv/bin/hermes
+
+# Stop it before ./scripts/sync_dropbox.sh (its SQLite stores are open while it runs)
+podman-compose stop hermes
 ```
 
 ### 4.5. Obsidian Knowledge Vault Sync
@@ -156,8 +158,8 @@ From the repository root:
 ## 📐 5. Code Standards & Architecture Guidelines
 
 ### 5.1. General Monorepo Boundaries
-- **Keep modules decoupled**: Sub-systems and crawlers should interact with Hermes and the Personal System via well-defined REST endpoints or message queues (Redis), not by tightly coupling internal directory paths.
-- **No monolithic cross-imports**: Backend Go code should remain completely independent of frontend Node packages. Hermes Python scripts should communicate via standard data contracts.
+- **Keep modules decoupled**: Sub-systems and crawlers should interact with the Personal System via well-defined REST endpoints or message queues (Redis), not by tightly coupling internal directory paths.
+- **No monolithic cross-imports**: Backend Go code should remain completely independent of frontend Node packages.
 
 ### 5.2. Golang Backend Guidelines (`personal-system/backend`)
 - **Package Architecture**:

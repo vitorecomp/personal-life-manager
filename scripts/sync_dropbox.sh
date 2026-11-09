@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Syncs with Dropbox what git does not keep: everything in data/ except the Markdown notes
-# (data/database/ with the SQLite databases and logs, any other files). The notes in
-# data/second-brain/ and data/knowledge-data/ are versioned in git and pushed to GitHub
-# (see their .gitignore), so the two never overlap.
+# Syncs with Dropbox what git does not keep: everything in data/ except the second brain's Markdown
+# notes. That is data/database/ (SQLite databases, logs, the Hermes Agent state in hermes-mds/), all
+# of data/knowledge-data/ (crawler output, notes included) and any non-Markdown file of
+# data/second-brain/. The second brain's notes are versioned in git and pushed to GitHub (see its
+# .gitignore), so the two never overlap.
 #
 # Usage:
 #   ./scripts/sync_dropbox.sh                 push: make Dropbox match data/ (default)
 #   ./scripts/sync_dropbox.sh pull            bring files that are newer on Dropbox into data/
 #   ./scripts/sync_dropbox.sh check           compare both sides without changing anything
-#   add --dry-run to see what would happen, --force to sync even while a crawler is running
+#   add --dry-run to see what would happen, --force to sync even while a crawler or Hermes is running
 #
 # Settings (project root .env): DROPBOX_REMOTE (rclone remote name, default "dropbox"),
 #                               DROPBOX_PATH (folder inside Dropbox, default "second-brain")
@@ -35,7 +36,7 @@ env_value() {
     printf '%s' "${value:-$default}"
 }
 
-usage() { sed -n '4,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '4,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 ACTION="push"
 DRY_RUN=()
@@ -74,7 +75,7 @@ if [[ ! -d "$LOCAL_DIR" ]]; then
     exit 1
 fi
 if [[ "$ACTION" == "push" ]] && [[ -z "$(find "$LOCAL_DIR" -type f -not -path "*/.git/*" \
-        -not -name "*.md" -not -name ".gitignore" -not -name ".gitkeep" -print -quit)" ]]; then
+        -not -path "$LOCAL_DIR/second-brain/*.md" -not -name ".gitignore" -not -name ".gitkeep" -print -quit)" ]]; then
     echo -e "${RED}$LOCAL_DIR has no files for Dropbox; refusing to push (it would empty the Dropbox copy).${NC}" >&2
     exit 1
 fi
@@ -89,15 +90,22 @@ if [[ "$ACTION" != "check" && $FORCE -eq 0 ]]; then
             exit 1
         fi
     done
+    # Hermes keeps its SQLite session and memory stores open while it runs.
+    if command -v podman >/dev/null 2>&1 && [[ -n "$(podman ps -q --filter name='^hermes$' 2>/dev/null)" ]]; then
+        echo -e "${RED}Hermes is running.${NC}" >&2
+        echo "Stop it first (podman-compose stop hermes), or pass --force to sync anyway." >&2
+        exit 1
+    fi
 fi
 
 FILTERS=(
-    # What git keeps (each repository's .gitignore lets only Markdown in) stays out of Dropbox:
-    --exclude "*.md" --exclude ".gitignore"
+    # What git keeps (the second brain's .gitignore lets only Markdown in) stays out of Dropbox:
+    --exclude "/second-brain/**.md" --exclude ".gitignore"
     --exclude ".git/**"           # GitHub keeps the history of the notes
     --exclude ".gitkeep"          # keeps the data/ folders in this repository
     --exclude "*.lock"            # crawler run locks
-    --exclude "*.sqlite-journal" --exclude "*.sqlite-wal" --exclude "*.sqlite-shm"
+    --exclude "*-journal" --exclude "*-wal" --exclude "*-shm"   # SQLite temporary files
+    --exclude "/database/hermes-mds/.env"   # secrets stay out, even if Hermes ever writes one
 )
 COMMON=(--transfers 8 --checkers 16 --stats-one-line --stats 10s -v)
 [[ -t 1 ]] && COMMON+=(--progress)
@@ -105,7 +113,7 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 
 case "$ACTION" in
     push)
-        echo -e "${YELLOW}==> Pushing $LOCAL_DIR to $DEST (everything except the notes, which go to GitHub)${NC}"
+        echo -e "${YELLOW}==> Pushing $LOCAL_DIR to $DEST (everything except the second brain notes, which go to GitHub)${NC}"
         echo "    files changed or deleted on Dropbox are kept in $REMOTE:$REMOTE_PATH-versions/$STAMP"
         rclone sync "$LOCAL_DIR" "$DEST" "${FILTERS[@]}" "${COMMON[@]}" "${DRY_RUN[@]}" \
             --backup-dir "$REMOTE:$REMOTE_PATH-versions/$STAMP"

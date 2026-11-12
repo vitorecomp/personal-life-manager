@@ -139,7 +139,7 @@ From the repository root:
 podman-compose up -d hermes
 
 # Chat with it in the terminal
-podman exec -it hermes /opt/hermes/.venv/bin/hermes
+podman exec -it hermes hermes
 
 # Stop it before ./scripts/sync_dropbox.sh (its SQLite stores are open while it runs)
 podman-compose stop hermes

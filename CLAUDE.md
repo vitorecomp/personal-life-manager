@@ -45,7 +45,7 @@ npm run lint              # eslint
 ### Hermes Agent / vault sync (repo root)
 ```bash
 podman-compose up -d hermes
-podman exec -it hermes /opt/hermes/.venv/bin/hermes   # chat
+podman exec -it hermes hermes                         # chat (the image shim drops to the hermes user)
 podman-compose stop hermes                            # stop before ./scripts/sync_dropbox.sh
 podman-compose up -d obsidian                         # Obsidian on the same vault → https://localhost:3010
 ./scripts/download_brain.sh   # sync Obsidian vault into data/second-brain/ (needs OBSIDIAN_BRAIN_REPO_URL in .env)

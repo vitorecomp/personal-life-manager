@@ -87,28 +87,23 @@ services:
   # 5. Hermes Agent (Nous Research) - AI agent over the second brain vault
   # ===================================================
   # Start alone with: podman-compose up -d hermes
-  # Chat:             podman exec -it hermes /opt/hermes/.venv/bin/hermes
+  # Chat:             podman exec -it hermes hermes
   # Dashboard:        http://localhost:9119 (bound to localhost only)
   hermes:
     image: docker.io/nousresearch/hermes-agent:latest
     container_name: hermes
     restart: unless-stopped
     network_mode: host
-    # Rootless podman: keep-id maps container uid 1000 to your host user, and s6-overlay's /init
-    # (which must run as root inside) drops every service to HERMES_UID, so files the agent writes
-    # in the vault and in hermes-mds stay owned by you on the host.
-    userns_mode: keep-id
+    # Rootless podman: your host user becomes uid 10000 inside, the image's own `hermes` user, so
+    # files the agent writes in the vault and in hermes-mds stay owned by you on the host.
+    # s6-overlay's /init must start as root (it then drops every service to `hermes`).
+    userns_mode: "keep-id:uid=10000,gid=10000"
     user: "0:0"
+    # Every variable of the root .env (Gemini, Telegram, Notion, Taiga, ...) becomes a container env
+    # var, so secrets are never written to hermes-mds (which is synced to Dropbox). Read when the
+    # container is created: after editing .env, run `podman-compose up -d --force-recreate hermes`.
+    env_file: .env
     environment:
-      HERMES_UID: ${HERMES_UID:-1000}
-      HERMES_GID: ${HERMES_GID:-1000}
-      # Taken from the root .env, never written to hermes-mds (which is synced to Dropbox).
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      # Telegram (polling, no open port needed); only the numeric user IDs listed can talk to it.
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
-      # Notion (bundled notion skill); it only sees the pages shared with the integration.
-      NOTION_API_KEY: ${NOTION_API_KEY:-}
       NOTION_API_TOKEN: ${NOTION_API_KEY:-}   # same key, for Notion's ntn CLI
       NOTION_KEYRING: "0"                      # ntn: read the key from the env, no keyring in a container
       OBSIDIAN_VAULT_PATH: /vault
@@ -130,12 +125,13 @@ services:
     image: lscr.io/linuxserver/obsidian:latest
     container_name: obsidian
     restart: unless-stopped
-    # Same uid mapping as hermes: files edited here stay owned by your host user.
-    userns_mode: keep-id
+    # Same idea as hermes: your host user becomes uid 911 inside, the image's `abc` user, so files
+    # edited here stay owned by you on the host.
+    userns_mode: "keep-id:uid=911,gid=911"
     user: "0:0"
     environment:
-      PUID: ${HERMES_UID:-1000}
-      PGID: ${HERMES_GID:-1000}
+      PUID: "911"
+      PGID: "911"
       TZ: ${TZ:-America/Sao_Paulo}
     volumes:
       - obsidian_config:/config        # app settings and the list of opened vaults

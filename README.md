@@ -87,7 +87,7 @@ the key is passed as an environment variable and never stored in `hermes-mds/`.
 
 ```bash
 podman-compose up -d hermes                               # start it
-podman exec -it hermes /opt/hermes/.venv/bin/hermes       # chat in the terminal
+podman exec -it hermes hermes       # chat in the terminal
 podman-compose stop hermes                                # stop it before syncing Dropbox
 git -C data/second-brain diff                             # review its edits before committing
 ```

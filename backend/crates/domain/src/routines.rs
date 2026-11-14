@@ -62,6 +62,7 @@ impl Default for HabitTrackingType {
 pub enum HabitFrequencyType {
     Daily,
     Weekdays,
+    #[serde(alias = "custom")]
     TimesPerWeek,
 }
 
@@ -202,6 +203,12 @@ pub struct DailyCheckin {
     pub highlight: String,
     pub reflection_md: String,
     pub weekly_review_json: Option<serde_json::Value>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub obsidian_vault_path: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub weekly_review_vault_path: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -220,6 +227,7 @@ pub struct UpsertDailyCheckinRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema, sqlx::FromRow)]
 pub struct IdealWeekBlock {
+    #[serde(default = "crate::id::new_uuid_v7")]
     pub id: Uuid,
     pub day_of_week: i16,
     pub start_time: NaiveTime,
@@ -227,7 +235,9 @@ pub struct IdealWeekBlock {
     pub category: String,
     pub linked_goal_id: Option<Uuid>,
     pub label: String,
+    #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
+    #[serde(default = "Utc::now")]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -236,11 +246,29 @@ pub struct UpsertIdealWeekRequest {
     pub blocks: Vec<IdealWeekBlock>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct IdealWeekCategoryVariance {
+    pub category: String,
+    pub planned_minutes: i64,
+    pub actual_minutes: i64,
+    pub variance_minutes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct IdealWeekResponse {
+    pub blocks: Vec<IdealWeekBlock>,
+    pub total_planned_minutes: i64,
+    pub total_actual_minutes: i64,
+    pub variance_by_category: Vec<IdealWeekCategoryVariance>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct RoutineStackWithItems {
     #[serde(flatten)]
     pub routine: Routine,
     pub items: Vec<RoutineItem>,
+    #[serde(default)]
+    pub today_logs: Vec<RoutineLog>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -249,7 +277,26 @@ pub struct HabitStreakSummary {
     pub title: String,
     pub current_streak: i32,
     pub longest_streak: i32,
+    #[serde(default)]
+    pub best_streak: i32,
+    #[serde(default)]
+    pub frequency_type: HabitFrequencyType,
     pub completion_rate_30d_pct: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct RoutineHeatmapDay {
+    pub date: NaiveDate,
+    pub completed_count: i32,
+    pub total_count: i32,
+    pub completion_ratio: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct RoutineStackAdherence {
+    pub routine_id: Uuid,
+    pub routine_name: String,
+    pub adherence_pct: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -257,14 +304,30 @@ pub struct RoutineAnalyticsResponse {
     pub streaks: Vec<HabitStreakSummary>,
     pub matrix_8x12: Vec<bool>,
     pub consistency_score_pct: f64,
+    #[serde(default)]
+    pub heatmap_365d: Vec<RoutineHeatmapDay>,
+    #[serde(default)]
+    pub routine_adherence: Vec<RoutineStackAdherence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct WeeklyReviewSummaryResponse {
     pub week_start: NaiveDate,
     pub week_end: NaiveDate,
+    #[serde(default)]
+    pub iso_week: String,
     pub completed_tasks_count: usize,
+    #[serde(default)]
+    pub inbox_tasks_count: usize,
     pub focus_hours: f64,
+    #[serde(default)]
+    pub focus_minutes: i64,
     pub routine_consistency_pct: f64,
+    #[serde(default)]
+    pub completed_lessons_count: usize,
+    #[serde(default)]
+    pub goals_avg_progress_pct: f64,
+    #[serde(default)]
+    pub investable_surplus_cents: i64,
     pub vault_export_path: Option<String>,
 }

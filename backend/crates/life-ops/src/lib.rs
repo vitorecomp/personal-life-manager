@@ -2,11 +2,16 @@
 
 pub mod auth;
 pub mod config;
+pub mod courses;
 pub mod dashboards;
+pub mod finance;
+pub mod goals;
+pub mod routines;
 pub mod servers;
 pub mod service;
 pub mod sync;
 pub mod test_support;
+pub mod todos;
 
 pub use config::LifeOpsConfig;
 pub use hermes_domain::{MOBILE_SYNC_TABLES, SYSTEM_VERSION};
@@ -1150,6 +1155,1252 @@ mod tests {
         }
         let capped_node = svc.get_server(s_tcp_ok.id).await.unwrap();
         assert_eq!(capped_node.latency_history_ms.len(), 24);
+
+        test_db.teardown().await;
+    }
+
+    // =========================================================================
+    // M2B Tests: F13 Todos & Focus Timer, F14 Routines & Vault Export,
+    //            F15 Yearly Goals & 90° Blueprint, F16 Courses & YouTube Import,
+    //            F17 Multi-Market Finance & FIRE + Cross-Module Life Score
+    // =========================================================================
+
+    #[test]
+    fn f13_nlp_quick_capture_parser_extracts_tokens_deterministically() {
+        use chrono::NaiveDate;
+        use hermes_domain::todos::{TaskEnergyLevel, TaskPriority, TaskStatus};
+
+        let anchor = NaiveDate::from_ymd_opt(2026, 11, 14).unwrap();
+        let parsed = crate::todos::parse_quick_capture_with_today(
+            "Implement Raft consensus lab #distributed #rust +systems @deep !p1 tomorrow 1h30m",
+            anchor,
+        )
+        .expect("parse quick capture");
+
+        assert_eq!(parsed.clean_title, "Implement Raft consensus lab");
+        assert_eq!(parsed.tags, vec!["distributed".to_string(), "rust".to_string()]);
+        assert_eq!(parsed.project_hint.as_deref(), Some("systems"));
+        assert_eq!(parsed.energy_level, Some(TaskEnergyLevel::Deep));
+        assert_eq!(parsed.priority, TaskPriority::Urgent);
+        assert_eq!(
+            parsed.scheduled_date,
+            Some(NaiveDate::from_ymd_opt(2026, 11, 15).unwrap())
+        );
+        assert_eq!(parsed.estimated_minutes, Some(90));
+        assert_eq!(parsed.status, TaskStatus::Todo);
+
+        let parsed_rel = crate::todos::parse_quick_capture_with_today(
+            "Review quarterly portfolio @shallow !low in 5 days 45m",
+            anchor,
+        )
+        .expect("parse relative days");
+        assert_eq!(parsed_rel.clean_title, "Review quarterly portfolio");
+        assert_eq!(parsed_rel.energy_level, Some(TaskEnergyLevel::Shallow));
+        assert_eq!(parsed_rel.priority, TaskPriority::Low);
+        assert_eq!(
+            parsed_rel.scheduled_date,
+            Some(NaiveDate::from_ymd_opt(2026, 11, 19).unwrap())
+        );
+        assert_eq!(parsed_rel.estimated_minutes, Some(45));
+    }
+
+    #[tokio::test]
+    async fn f13_todos_cycle_detection_terminal_io_topology_and_single_active_timer() {
+        use hermes_domain::courses::{CourseProvider, CourseStatus, CreateCourseRequest};
+        use hermes_domain::todos::{
+            CreateProjectRequest, CreateTaskRequest, ProjectArea, ProjectStatus, StartTimerRequest,
+            StopTimerRequest, TaskListFilter, TaskPriority, TaskStatus, TimeCategory, TimerMode,
+            UpdateTaskRequest,
+        };
+
+        let test_db = TestDb::new().await;
+        let svc = LifeOpsService::from_test_db(&test_db);
+
+        let project = svc
+            .create_project(CreateProjectRequest {
+                name: "HERMES Core".to_string(),
+                area: ProjectArea::Systems,
+                goal_id: None,
+                status: ProjectStatus::Active,
+                color: "#F87C18".to_string(),
+            })
+            .await
+            .expect("create project");
+
+        let task_a = svc
+            .create_task(CreateTaskRequest {
+                title: "Task A".to_string(),
+                project_id: Some(project.id),
+                status: TaskStatus::Todo,
+                estimated_minutes: Some(60),
+                scheduled_date: Some(Utc::now().date_naive()),
+                ..Default::default()
+            })
+            .await
+            .expect("create task A");
+
+        let task_b = svc
+            .create_task(CreateTaskRequest {
+                title: "Task B".to_string(),
+                project_id: Some(project.id),
+                status: TaskStatus::InProgress,
+                blocked_by_task_ids: vec![task_a.id],
+                estimated_minutes: Some(45),
+                scheduled_date: Some(Utc::now().date_naive()),
+                ..Default::default()
+            })
+            .await
+            .expect("create task B");
+
+        let task_c = svc
+            .create_task(CreateTaskRequest {
+                title: "Task C".to_string(),
+                project_id: Some(project.id),
+                parent_task_id: Some(task_b.id),
+                status: TaskStatus::Review,
+                blocked_by_task_ids: vec![task_b.id],
+                ..Default::default()
+            })
+            .await
+            .expect("create task C");
+
+        // 1. Self-dependency cycle A -> A must return 422 CYCLE_DETECTED
+        let self_cycle_err = svc
+            .update_task(
+                task_a.id,
+                UpdateTaskRequest {
+                    blocked_by_task_ids: Some(vec![task_a.id]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("self dependency must fail");
+        assert_eq!(self_cycle_err.status_code(), 422);
+        assert_eq!(self_cycle_err.code(), "CYCLE_DETECTED");
+
+        // 2. Multi-hop cycle A -> C (when C -> B -> A) must return 422 CYCLE_DETECTED
+        let hop_cycle_err = svc
+            .update_task(
+                task_a.id,
+                UpdateTaskRequest {
+                    blocked_by_task_ids: Some(vec![task_c.id]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("multi-hop cycle must fail");
+        assert_eq!(hop_cycle_err.status_code(), 422);
+        assert_eq!(hop_cycle_err.code(), "CYCLE_DETECTED");
+
+        // 3. Verify TERMINAL-I/O flow topology & Today capacity meter
+        let flow = svc
+            .get_task_flow(Some(project.id))
+            .await
+            .expect("get_task_flow");
+        assert_eq!(flow.stages.len(), 4);
+        assert!(flow.nodes.iter().any(|n| n.node_kind == "hub"));
+        assert!(!flow.dependency_arcs.is_empty());
+        assert!(!flow.subtask_edges.is_empty());
+
+        let today_tasks = svc
+            .list_tasks(TaskListFilter {
+                perspective: Some("today".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("list today perspective");
+        assert!(today_tasks.len() >= 2);
+
+        // 4. Verify single active timer auto-stop & rollup to tasks.actual_seconds and courses.logged_study_seconds
+        let course = svc
+            .create_course(CreateCourseRequest {
+                title: "Distributed Systems".to_string(),
+                provider: CourseProvider::University,
+                instructor: "MIT".to_string(),
+                source_url: None,
+                status: CourseStatus::Active,
+                priority: TaskPriority::High,
+                goal_id: None,
+                youtube_playlist_id: None,
+                vault_folder_path: None,
+                estimated_total_minutes: 120,
+                target_completion_date: None,
+            })
+            .await
+            .expect("create course")
+            .course;
+
+        let timer_1 = svc
+            .start_timer(StartTimerRequest {
+                task_id: Some(task_a.id),
+                course_id: None,
+                lesson_id: None,
+                category: TimeCategory::DeepWork,
+                timer_mode: TimerMode::Pomodoro25_5,
+                work_minutes: Some(25),
+                break_minutes: Some(5),
+                notes: Some("First session".to_string()),
+            })
+            .await
+            .expect("start timer 1");
+        assert!(timer_1.running);
+        let session_1_id = timer_1.session.as_ref().unwrap().id;
+
+        // Backdate timer_1 by 120 seconds so auto-stop rolls up 120s onto task_a
+        sqlx::query("UPDATE time_sessions SET started_at = NOW() - INTERVAL '120 seconds' WHERE id = $1")
+            .bind(session_1_id)
+            .execute(&test_db.pool)
+            .await
+            .unwrap();
+
+        // Starting timer_2 on course must auto-stop timer_1 without violating idx_time_sessions_single_active_timer
+        let timer_2 = svc
+            .start_timer(StartTimerRequest {
+                task_id: None,
+                course_id: Some(course.id),
+                lesson_id: None,
+                category: TimeCategory::Learning,
+                timer_mode: TimerMode::Stopwatch,
+                work_minutes: None,
+                break_minutes: None,
+                notes: Some("Course study".to_string()),
+            })
+            .await
+            .expect("start timer 2 auto-stopping timer 1");
+        let session_2_id = timer_2.session.as_ref().unwrap().id;
+
+        let refreshed_task_a = svc.get_task(task_a.id).await.unwrap();
+        assert!(
+            refreshed_task_a.actual_seconds >= 115,
+            "Expected timer_1 auto-stop to roll up >= 115s onto task_a, got {}",
+            refreshed_task_a.actual_seconds
+        );
+
+        // Backdate timer_2 by 300s and stop it explicitly
+        sqlx::query("UPDATE time_sessions SET started_at = NOW() - INTERVAL '300 seconds' WHERE id = $1")
+            .bind(session_2_id)
+            .execute(&test_db.pool)
+            .await
+            .unwrap();
+
+        let stopped = svc
+            .stop_timer(StopTimerRequest {
+                duration_seconds: None,
+                notes: Some("Finished lecture".to_string()),
+            })
+            .await
+            .expect("stop timer 2");
+        assert!(stopped.duration_seconds >= 295);
+
+        let refreshed_course = svc.get_course(course.id).await.unwrap().course;
+        assert!(
+            refreshed_course.logged_study_seconds >= 295,
+            "Expected stop_timer to roll up >= 295s onto course, got {}",
+            refreshed_course.logged_study_seconds
+        );
+
+        let stats = svc.get_time_stats().await.expect("get_time_stats");
+        assert_eq!(stats.hourly_buckets_24h.len(), 24);
+        assert_eq!(stats.barcode_buckets_96.len(), 96);
+        assert!(stats.today_seconds >= 400);
+
+        test_db.teardown().await;
+    }
+
+    #[tokio::test]
+    async fn f14_routines_streaks_8x12_matrix_ideal_week_and_atomic_vault_export() {
+        use chrono::{Duration, NaiveTime};
+        use hermes_domain::routines::{
+            CreateRoutineItemRequest, CreateRoutineRequest, DayProfile, HabitFrequencyType,
+            HabitTrackingType, IdealWeekBlock, LogRoutineItemRequest, RoutineLogStatus,
+            RoutineTimeSlot, UpsertDailyCheckinRequest, UpsertIdealWeekRequest,
+        };
+
+        let test_db = TestDb::new().await;
+        let svc = LifeOpsService::from_test_db(&test_db);
+
+        let routine = svc
+            .create_routine(CreateRoutineRequest {
+                name: "Morning Tactical Stack".to_string(),
+                time_slot: RoutineTimeSlot::Morning,
+                day_profile: DayProfile::Workday,
+                target_start_time: NaiveTime::from_hms_opt(7, 0, 0),
+                sort_order: Some(1),
+                active: true,
+            })
+            .await
+            .expect("create routine");
+
+        let item = svc
+            .create_routine_item(
+                routine.routine.id,
+                CreateRoutineItemRequest {
+                    goal_id: None,
+                    title: "Mobility & Hydration".to_string(),
+                    tracking_type: HabitTrackingType::Boolean,
+                    target_value: None,
+                    unit: None,
+                    frequency_type: HabitFrequencyType::Daily,
+                    frequency_config: serde_json::json!({}),
+                    estimated_minutes: Some(15),
+                    sort_order: Some(1),
+                },
+            )
+            .await
+            .expect("create routine item");
+
+        let today = Utc::now().date_naive();
+        for offset in (0..4).rev() {
+            let d = today - Duration::days(offset);
+            let _ = svc
+                .log_routine_item(LogRoutineItemRequest {
+                    routine_item_id: item.id,
+                    log_date: Some(d),
+                    status: RoutineLogStatus::Completed,
+                    numeric_value: None,
+                    notes: format!("Day -{offset}"),
+                })
+                .await
+                .expect("log routine item");
+        }
+
+        let analytics = svc
+            .get_routines_analytics()
+            .await
+            .expect("get_routines_analytics");
+        assert_eq!(analytics.matrix_8x12.len(), 96);
+        assert_eq!(analytics.heatmap_365d.len(), 365);
+        let item_streak = analytics
+            .streaks
+            .iter()
+            .find(|s| s.routine_item_id == item.id)
+            .expect("streak summary for item");
+        assert_eq!(item_streak.current_streak, 4);
+        assert!(item_streak.longest_streak >= 4);
+
+        // Ideal week blocks + variance
+        let ideal = svc
+            .replace_ideal_week(UpsertIdealWeekRequest {
+                blocks: vec![
+                    IdealWeekBlock {
+                        id: new_uuid_v7(),
+                        day_of_week: 1,
+                        start_time: NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
+                        end_time: NaiveTime::from_hms_opt(11, 0, 0).unwrap(),
+                        category: "deep_work".to_string(),
+                        label: "Deep Architecture".to_string(),
+                        linked_goal_id: None,
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    },
+                    IdealWeekBlock {
+                        id: new_uuid_v7(),
+                        day_of_week: 2,
+                        start_time: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                        end_time: NaiveTime::from_hms_opt(11, 0, 0).unwrap(),
+                        category: "learning".to_string(),
+                        label: "Systems Study".to_string(),
+                        linked_goal_id: None,
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    },
+                ],
+            })
+            .await
+            .expect("replace_ideal_week");
+        assert_eq!(ideal.blocks.len(), 2);
+        assert!(!ideal.variance_by_category.is_empty());
+
+        // Atomic Obsidian Markdown export preserving <!-- keep --> blocks
+        let daily_rel = format!("Daily/{}.md", today.format("%Y-%m-%d"));
+        let daily_abs = test_db.second_brain_dir.join(&daily_rel);
+        std::fs::create_dir_all(daily_abs.parent().unwrap()).unwrap();
+        std::fs::write(
+            &daily_abs,
+            "# Existing Note\n\n<!-- keep -->\nCustom operator handwritten note!\n<!-- /keep -->\n",
+        )
+        .unwrap();
+
+        let checkin = svc
+            .upsert_checkin(
+                today,
+                UpsertDailyCheckinRequest {
+                    day_profile_used: Some(DayProfile::Workday),
+                    energy_score: Some(4),
+                    mood_score: Some(5),
+                    sleep_hours: Some(rust_decimal::Decimal::new(75, 1)),
+                    highlight: Some("Ship M2B".to_string()),
+                    reflection_md: Some("All tests green".to_string()),
+                    weekly_review_json: Some(serde_json::json!({
+                        "wins": "Completed all 5 domain engines",
+                        "challenges": "None",
+                        "next_week_priorities": "M2C & M2D"
+                    })),
+                },
+            )
+            .await
+            .expect("upsert_checkin with vault export");
+
+        assert_eq!(checkin.obsidian_vault_path.as_deref(), Some(daily_rel.as_str()));
+        assert!(checkin.weekly_review_vault_path.is_some());
+
+        let exported_daily = std::fs::read_to_string(&daily_abs).expect("read exported daily md");
+        assert!(exported_daily.contains("Ship M2B"));
+        assert!(
+            exported_daily.contains("Custom operator handwritten note!"),
+            "Atomic export must preserve <!-- keep -->...<!-- /keep --> blocks"
+        );
+
+        let weekly_rel = checkin.weekly_review_vault_path.unwrap();
+        let weekly_abs = test_db.second_brain_dir.join(&weekly_rel);
+        assert!(weekly_abs.is_file(), "Weekly review Markdown file must be written to temp Vault");
+
+        test_db.teardown().await;
+    }
+
+    #[tokio::test]
+    async fn f15_goals_seven_metric_rollups_focus_cap_and_90_degree_manhattan_blueprint() {
+        use hermes_domain::courses::{
+            CourseProvider, CourseStatus, CreateCourseLessonRequest, CreateCourseModuleRequest,
+            CreateCourseRequest, LessonStatus,
+        };
+        use hermes_domain::finance::{AssetClass, CreatePortfolioAssetRequest, CurrencyCode};
+        use hermes_domain::goals::{
+            BlueprintPos, CreateGoalRequest, CreateKeyResultRequest, GoalPillar, GoalStatus,
+            KrMetricType, OkrQuarter, UpdateGoalBlueprintPosRequest,
+        };
+        use hermes_domain::routines::{
+            CreateRoutineItemRequest, CreateRoutineRequest, DayProfile, HabitFrequencyType,
+            HabitTrackingType, LogRoutineItemRequest, RoutineLogStatus, RoutineTimeSlot,
+        };
+        use hermes_domain::todos::{
+            CreateProjectRequest, CreateTaskRequest, ProjectArea, ProjectStatus, TaskStatus,
+        };
+        use rust_decimal::Decimal;
+
+        let test_db = TestDb::new().await;
+        let svc = LifeOpsService::from_test_db(&test_db);
+
+        // Create linked entities for linked_course, linked_finance, linked_habit, linked_project
+        let course = svc
+            .create_course(CreateCourseRequest {
+                title: "Rust Async Internals".to_string(),
+                provider: CourseProvider::Custom,
+                instructor: "Jon".to_string(),
+                source_url: None,
+                status: CourseStatus::Active,
+                priority: Default::default(),
+                goal_id: None,
+                youtube_playlist_id: None,
+                vault_folder_path: None,
+                estimated_total_minutes: 60,
+                target_completion_date: None,
+            })
+            .await
+            .unwrap()
+            .course;
+        let c_mod = svc
+            .create_course_module(
+                course.id,
+                CreateCourseModuleRequest {
+                    title: "Pin & Futures".to_string(),
+                    sort_order: Some(0),
+                },
+            )
+            .await
+            .unwrap();
+        svc.create_course_lesson(
+            c_mod.id,
+            CreateCourseLessonRequest {
+                title: "Lesson 1".to_string(),
+                duration_minutes: 30,
+                status: LessonStatus::Completed,
+                external_url: None,
+                youtube_video_id: None,
+                vault_note_path: None,
+                key_summary_md: String::new(),
+                sort_order: Some(0),
+            },
+        )
+        .await
+        .unwrap();
+        svc.create_course_lesson(
+            c_mod.id,
+            CreateCourseLessonRequest {
+                title: "Lesson 2".to_string(),
+                duration_minutes: 30,
+                status: LessonStatus::Todo,
+                external_url: None,
+                youtube_video_id: None,
+                vault_note_path: None,
+                key_summary_md: String::new(),
+                sort_order: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+
+        let asset = svc
+            .create_asset(CreatePortfolioAssetRequest {
+                id: None,
+                symbol: "WEGE3.SA".to_string(),
+                name: "WEG S.A.".to_string(),
+                asset_class: AssetClass::BrEquity,
+                currency: CurrencyCode::Brl,
+                in_portfolio: true,
+                is_watchlist: None,
+                quantity: Decimal::from(100),
+                avg_cost_cents: 3500,
+                current_price_cents: 4000, // 400_000 cents
+                previous_close_cents: Some(3900),
+                dividend_yield_pct: None,
+                target_weight_pct: Decimal::from(50),
+                alert_low_cents: None,
+                alert_high_cents: None,
+                thesis_md: String::new(),
+            })
+            .await
+            .unwrap();
+
+        let routine = svc
+            .create_routine(CreateRoutineRequest {
+                name: "Health Stack".to_string(),
+                time_slot: RoutineTimeSlot::Morning,
+                day_profile: DayProfile::Workday,
+                target_start_time: None,
+                sort_order: Some(0),
+                active: true,
+            })
+            .await
+            .unwrap();
+        let habit = svc
+            .create_routine_item(
+                routine.routine.id,
+                CreateRoutineItemRequest {
+                    goal_id: None,
+                    title: "Run 5km".to_string(),
+                    tracking_type: HabitTrackingType::Boolean,
+                    target_value: None,
+                    unit: None,
+                    frequency_type: HabitFrequencyType::Daily,
+                    frequency_config: serde_json::json!({}),
+                    estimated_minutes: Some(30),
+                    sort_order: Some(0),
+                },
+            )
+            .await
+            .unwrap();
+        svc.log_routine_item(LogRoutineItemRequest {
+            routine_item_id: habit.id,
+            log_date: Some(Utc::now().date_naive()),
+            status: RoutineLogStatus::Completed,
+            numeric_value: None,
+            notes: String::new(),
+        })
+        .await
+        .unwrap();
+
+        let proj = svc
+            .create_project(CreateProjectRequest {
+                name: "Launch v1".to_string(),
+                area: ProjectArea::Career,
+                goal_id: None,
+                status: ProjectStatus::Active,
+                color: "#2CE5F2".to_string(),
+            })
+            .await
+            .unwrap();
+        svc.create_task(CreateTaskRequest {
+            title: "Ship API".to_string(),
+            project_id: Some(proj.id),
+            status: TaskStatus::Done,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let goal = svc
+            .create_goal(CreateGoalRequest {
+                year: 2026,
+                pillar: GoalPillar::Systems,
+                code: Some("G01".to_string()),
+                title: "Master Full-Stack Life Ops".to_string(),
+                why_motivation_md: "Unified execution".to_string(),
+                status: GoalStatus::InProgress,
+                priority_rank: Some(1),
+                target_date: None,
+                confidence_score: Some(9),
+                blueprint_pos: None,
+            })
+            .await
+            .unwrap();
+
+        // Add all 7 KR metric types
+        let _kr_num = svc
+            .create_key_result(
+                goal.goal.id,
+                CreateKeyResultRequest {
+                    quarter: OkrQuarter::Q1,
+                    code: Some("KR1".to_string()),
+                    title: "Numeric KR".to_string(),
+                    metric_type: KrMetricType::Numeric,
+                    start_value: Decimal::ZERO,
+                    current_value: Decimal::from(50),
+                    target_value: Decimal::from(100),
+                    unit: "%".to_string(),
+                    milestones_json: serde_json::json!([]),
+                    linked_entity_id: None,
+                    weight: Some(Decimal::ONE),
+                    blueprint_pos: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let _kr_mile = svc
+            .create_key_result(
+                goal.goal.id,
+                CreateKeyResultRequest {
+                    quarter: OkrQuarter::Q1,
+                    code: Some("KR2".to_string()),
+                    title: "Milestones KR".to_string(),
+                    metric_type: KrMetricType::Milestones,
+                    start_value: Decimal::ZERO,
+                    current_value: Decimal::ZERO,
+                    target_value: Decimal::from(100),
+                    unit: "%".to_string(),
+                    milestones_json: serde_json::json!([
+                        {"title": "M1", "done": true, "weight": 1.0},
+                        {"title": "M2", "done": false, "weight": 1.0}
+                    ]),
+                    linked_entity_id: None,
+                    weight: Some(Decimal::ONE),
+                    blueprint_pos: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let _kr_bin = svc
+            .create_key_result(
+                goal.goal.id,
+                CreateKeyResultRequest {
+                    quarter: OkrQuarter::Q2,
+                    code: Some("KR3".to_string()),
+                    title: "Binary KR".to_string(),
+                    metric_type: KrMetricType::Binary,
+                    start_value: Decimal::ZERO,
+                    current_value: Decimal::ONE,
+                    target_value: Decimal::ONE,
+                    unit: "bool".to_string(),
+                    milestones_json: serde_json::json!([]),
+                    linked_entity_id: None,
+                    weight: Some(Decimal::ONE),
+                    blueprint_pos: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let _kr_course = svc
+            .create_key_result(
+                goal.goal.id,
+                CreateKeyResultRequest {
+                    quarter: OkrQuarter::Q2,
+                    code: Some("KR4".to_string()),
+                    title: "Linked Course KR".to_string(),
+                    metric_type: KrMetricType::LinkedCourse,
+                    start_value: Decimal::ZERO,
+                    current_value: Decimal::ZERO,
+                    target_value: Decimal::from(100),
+                    unit: "%".to_string(),
+                    milestones_json: serde_json::json!([]),
+                    linked_entity_id: Some(course.id),
+                    weight: Some(Decimal::ONE),
+                    blueprint_pos: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let _kr_fin = svc
+            .create_key_result(
+                goal.goal.id,
+                CreateKeyResultRequest {
+                    quarter: OkrQuarter::Q3,
+                    code: Some("KR5".to_string()),
+                    title: "Linked Finance KR".to_string(),
+                    metric_type: KrMetricType::LinkedFinance,
+                    start_value: Decimal::ZERO,
+                    current_value: Decimal::ZERO,
+                    target_value: Decimal::from(800_000),
+                    unit: "BRL_cents".to_string(),
+                    milestones_json: serde_json::json!([]),
+                    linked_entity_id: Some(asset.id),
+                    weight: Some(Decimal::ONE),
+                    blueprint_pos: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let _kr_habit = svc
+            .create_key_result(
+                goal.goal.id,
+                CreateKeyResultRequest {
+                    quarter: OkrQuarter::Q3,
+                    code: Some("KR6".to_string()),
+                    title: "Linked Habit KR".to_string(),
+                    metric_type: KrMetricType::LinkedHabit,
+                    start_value: Decimal::ZERO,
+                    current_value: Decimal::ZERO,
+                    target_value: Decimal::from(2),
+                    unit: "sessions".to_string(),
+                    milestones_json: serde_json::json!([]),
+                    linked_entity_id: Some(habit.id),
+                    weight: Some(Decimal::ONE),
+                    blueprint_pos: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let _kr_proj = svc
+            .create_key_result(
+                goal.goal.id,
+                CreateKeyResultRequest {
+                    quarter: OkrQuarter::Q4,
+                    code: Some("KR7".to_string()),
+                    title: "Linked Project KR".to_string(),
+                    metric_type: KrMetricType::LinkedProject,
+                    start_value: Decimal::ZERO,
+                    current_value: Decimal::ZERO,
+                    target_value: Decimal::from(100),
+                    unit: "%".to_string(),
+                    milestones_json: serde_json::json!([]),
+                    linked_entity_id: Some(proj.id),
+                    weight: Some(Decimal::ONE),
+                    blueprint_pos: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let refreshed_goal = svc.get_goal(goal.goal.id).await.unwrap();
+        assert_eq!(refreshed_goal.key_results.len(), 7);
+        // Progress is (50 + 50 + 100 + 50 + 50 + 50 + 100) / 7 = 450 / 7 = 64.29%
+        assert!(refreshed_goal.goal.progress_pct > Decimal::from(60));
+
+        // Pin goal to a custom blueprint position and verify 90° orthogonal corridor invariant
+        svc.update_goal_blueprint_pos(
+            goal.goal.id,
+            UpdateGoalBlueprintPosRequest {
+                blueprint_pos: BlueprintPos { x: 850.0, y: 240.0 },
+            },
+        )
+        .await
+        .unwrap();
+
+        let bp = svc.get_goal_blueprint(2026).await.expect("get_goal_blueprint");
+        assert!(!bp.nodes.is_empty());
+        assert!(!bp.corridors.is_empty());
+        for corridor in &bp.corridors {
+            assert!(corridor.polyline.len() >= 2);
+            for seg in corridor.polyline.windows(2) {
+                let [x1, y1] = seg[0];
+                let [x2, y2] = seg[1];
+                assert!(
+                    x1 == x2 || y1 == y2,
+                    "Blueprint corridor segment must be strictly 90° orthogonal: ({x1},{y1}) -> ({x2},{y2})"
+                );
+            }
+        }
+
+        test_db.teardown().await;
+    }
+
+    #[tokio::test]
+    async fn f16_courses_readonly_youtube_sqlite_secret_redaction_quiz_and_spaced_review() {
+        use hermes_domain::courses::{
+            CourseProvider, CourseQuizRequest, CourseStatus, CreateCourseRequest,
+            ImportOutlineRequest, ImportYoutubePlaylistRequest, ReviewLessonRequest,
+            SpacedReviewAction, SpawnCourseTodoRequest,
+        };
+
+        let test_db = TestDb::new().await;
+        let svc = LifeOpsService::from_test_db(&test_db);
+
+        // 1. Missing youtube-lists.sqlite must return db_available = false and NEVER create a file on disk
+        assert!(!test_db.youtube_lists_db.exists());
+        let missing_resp = svc
+            .list_youtube_playlists()
+            .await
+            .expect("list_youtube_playlists when missing");
+        assert!(!missing_resp.db_available);
+        assert!(missing_resp.playlists.is_empty());
+        assert!(
+            !test_db.youtube_lists_db.exists(),
+            "list_youtube_playlists MUST NOT create an empty SQLite file when missing"
+        );
+
+        // 2. Populate a real SQLite database in test_db.youtube_lists_db + companion markdown notes
+        {
+            let conn = rusqlite::Connection::open(&test_db.youtube_lists_db).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE playlist (
+                    playlist_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    folder TEXT
+                );
+                CREATE TABLE video (
+                    video_id TEXT PRIMARY KEY,
+                    playlist_id TEXT NOT NULL,
+                    title TEXT,
+                    url TEXT,
+                    position INTEGER
+                );
+                CREATE TABLE video_detail (
+                    video_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    duration TEXT,
+                    description TEXT,
+                    note_path TEXT,
+                    note_file TEXT
+                );
+                CREATE TABLE ai_note (
+                    video_id TEXT PRIMARY KEY,
+                    output_text TEXT,
+                    output_file TEXT
+                );
+                INSERT INTO playlist (playlist_id, title, folder)
+                VALUES ('PL_RUST_SYS', 'Rust Systems Programming', 'rust-systems');
+
+                INSERT INTO video (video_id, playlist_id, title, url, position)
+                VALUES ('vid_01', 'PL_RUST_SYS', 'Memory Layout & Ownership', 'https://youtu.be/vid_01', 1),
+                       ('vid_02', 'PL_RUST_SYS', 'Shared Ref Video', 'https://youtu.be/vid_02', 2);
+
+                INSERT INTO video_detail (video_id, title, duration, description, note_path, note_file)
+                VALUES ('vid_01', 'Memory Layout & Ownership', 'PT25M', 'Intro to ownership', 'rust-systems/videos/vid-01/vid-01.md', 'vid-01.md'),
+                       ('vid_02', 'Zero-Copy Parsing', '18:00', 'Fallback description', NULL, 'vid-02.md');
+
+                "#,
+            )
+            .unwrap();
+            let fake_openai = format!("{}{}", "sk-proj-", "1234567890abcdefghijklmnop");
+            let fake_gapi = format!("{}{}", "AIzaSyA", "12345678901234567890123456789012");
+            conn.execute(
+                "INSERT INTO ai_note (video_id, output_text, output_file) VALUES ('vid_01', ?1, NULL)",
+                [format!("Summary with leaked key {fake_openai} and {fake_gapi}")],
+            )
+            .unwrap();
+        }
+
+        // Create a -ref.md pointer for vid-02 pointing to another playlist's folder + companion -ai-knowledge.md
+        let ref_dir = test_db
+            .youtube_lists_notes_dir
+            .join("rust-systems/videos/vid-02");
+        let owner_dir = test_db
+            .youtube_lists_notes_dir
+            .join("shared-parsers/videos/vid-02");
+        std::fs::create_dir_all(&ref_dir).unwrap();
+        std::fs::create_dir_all(&owner_dir).unwrap();
+        std::fs::write(
+            ref_dir.join("vid-02-ref.md"),
+            "# Shared Ref\n- **Full note:** [Zero-Copy Parsing](../../../shared-parsers/videos/vid-02/vid-02.md)\n",
+        )
+        .unwrap();
+        let fake_aws = format!("{}{}", "AKIA", "1234567890ABCDEF");
+        std::fs::write(
+            owner_dir.join("vid-02-ai-knowledge.md"),
+            format!(
+                "---\ntitle: Zero-Copy\n---\n> AI knowledge generated by gemini\n\nZero-copy slices with AWS key {fake_aws}!\n"
+            ),
+        )
+        .unwrap();
+
+        let avail_resp = svc.list_youtube_playlists().await.unwrap();
+        assert!(avail_resp.db_available);
+        assert_eq!(avail_resp.playlists.len(), 1);
+        assert_eq!(avail_resp.playlists[0].video_count, 2);
+
+        let imported = svc
+            .import_youtube_playlist(ImportYoutubePlaylistRequest {
+                playlist_id: "PL_RUST_SYS".to_string(),
+                goal_id: None,
+                title_override: None,
+            })
+            .await
+            .expect("import_youtube_playlist");
+        assert_eq!(imported.course.total_items, 2);
+        assert_eq!(imported.course.completed_items, 2); // Both distilled!
+        let lessons = &imported.modules[0].lessons;
+        assert_eq!(lessons.len(), 2);
+        assert!(
+            lessons[0].key_summary_md.contains("[redacted API key]"),
+            "Leaked OpenAI key must be redacted: {}",
+            lessons[0].key_summary_md
+        );
+        assert!(
+            lessons[0].key_summary_md.contains("[redacted Google API key]"),
+            "Leaked Google API key must be redacted: {}",
+            lessons[0].key_summary_md
+        );
+        assert_eq!(
+            lessons[1].vault_note_path.as_deref(),
+            Some("shared-parsers/videos/vid-02/vid-02.md")
+        );
+        assert!(
+            lessons[1]
+                .key_summary_md
+                .contains("[redacted AWS access key]"),
+            "Leaked AWS key must be redacted: {}",
+            lessons[1].key_summary_md
+        );
+
+        // 3. Pasted syllabus outline parser, 1-Click Quiz & Lab Todo Spawner
+        let outline_course = svc
+            .create_course(CreateCourseRequest {
+                title: "Compilers 101".to_string(),
+                provider: CourseProvider::Custom,
+                instructor: "Dragon".to_string(),
+                source_url: None,
+                status: CourseStatus::Active,
+                priority: Default::default(),
+                goal_id: None,
+                youtube_playlist_id: None,
+                vault_folder_path: None,
+                estimated_total_minutes: 0,
+                target_completion_date: None,
+            })
+            .await
+            .unwrap()
+            .course;
+
+        let parsed_syllabus = svc
+            .import_course_outline(
+                outline_course.id,
+                ImportOutlineRequest {
+                    outline_text: "# Module 1: Lexing\n- Tokenizers (20m)\n- DFA Construction (40m)\n# Module 2: Parsing\n- Recursive Descent (1h 15m)\n".to_string(),
+                },
+            )
+            .await
+            .expect("import_course_outline");
+        assert_eq!(parsed_syllabus.modules.len(), 2);
+        assert_eq!(parsed_syllabus.course.total_items, 3);
+        assert_eq!(parsed_syllabus.course.estimated_total_minutes, 135);
+
+        let quiz = svc
+            .create_course_quiz(
+                imported.course.id,
+                CourseQuizRequest {
+                    lesson_id: Some(lessons[0].id),
+                    module_id: None,
+                },
+            )
+            .await
+            .expect("create_course_quiz");
+        assert!(quiz.session_key.starts_with("sess_quiz_"));
+
+        let lab_todo = svc
+            .spawn_course_todo(
+                imported.course.id,
+                SpawnCourseTodoRequest {
+                    title: "Implement Arena Allocator Lab".to_string(),
+                    lesson_id: Some(lessons[0].id),
+                    scheduled_date: None,
+                },
+            )
+            .await
+            .expect("spawn_course_todo");
+        assert_eq!(lab_todo.course_id, Some(imported.course.id));
+
+        // 4. Spaced Review progression: 0 (7d) -> 1 (30d) -> 2 (90d) -> 3 (graduated, next_review_date = None)
+        let l0_id = lessons[0].id;
+        assert_eq!(lessons[0].review_stage, 0);
+
+        let r1 = svc
+            .complete_lesson_review(
+                l0_id,
+                ReviewLessonRequest {
+                    action: SpacedReviewAction::Complete,
+                    rating: None,
+                    snooze_days: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r1.review_stage, 1);
+        assert!(r1.next_review_date.is_some());
+
+        let r2 = svc
+            .complete_lesson_review(
+                l0_id,
+                ReviewLessonRequest {
+                    action: SpacedReviewAction::Complete,
+                    rating: None,
+                    snooze_days: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r2.review_stage, 2);
+        assert!(r2.next_review_date.is_some());
+
+        let r3 = svc
+            .complete_lesson_review(
+                l0_id,
+                ReviewLessonRequest {
+                    action: SpacedReviewAction::Complete,
+                    rating: None,
+                    snooze_days: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r3.review_stage, 3);
+        assert!(r3.next_review_date.is_none());
+
+        test_db.teardown().await;
+    }
+
+    #[tokio::test]
+    async fn f17_finance_200_tile_waffle_buy_only_rebalancer_macro_spend_fire_and_5_pillar_life_score() {
+        use hermes_domain::finance::{
+            AssetClass, CreatePortfolioAssetRequest, CurrencyCode, FireSimulationRequest,
+            UpsertMonthlyInvestmentPlanRequest,
+        };
+        use rust_decimal::Decimal;
+
+        let test_db = TestDb::new().await;
+        let svc = LifeOpsService::from_test_db(&test_db);
+        let mut events_rx = svc.subscribe_events();
+
+        // 1. Empty portfolio allocation has 0 waffle tiles
+        let empty_alloc = svc.get_portfolio_allocation(None, None).await.unwrap();
+        assert_eq!(empty_alloc.total_brl_cents, 0);
+        assert!(empty_alloc.waffle_tiles.is_empty());
+
+        // 2. Create 3 holdings with equal value (33.333% each) to verify Hare-Niemeyer largest-remainder -> 200 tiles
+        let a1 = svc
+            .create_asset(CreatePortfolioAssetRequest {
+                id: None,
+                symbol: "PETR4.SA".to_string(),
+                name: "Petrobras".to_string(),
+                asset_class: AssetClass::BrEquity,
+                currency: CurrencyCode::Brl,
+                in_portfolio: true,
+                is_watchlist: None,
+                quantity: Decimal::from(100),
+                avg_cost_cents: 3000,
+                current_price_cents: 4000, // R$ 4,000.00 (400,000 cents)
+                previous_close_cents: Some(3900),
+                dividend_yield_pct: None,
+                target_weight_pct: Decimal::from(20), // Overweight (33.33% > 20%)
+                alert_low_cents: Some(3500),
+                alert_high_cents: Some(3950), // Trigger high alert!
+                thesis_md: "Cash cow".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let _a2 = svc
+            .create_asset(CreatePortfolioAssetRequest {
+                id: None,
+                symbol: "VOO".to_string(),
+                name: "Vanguard S&P 500".to_string(),
+                asset_class: AssetClass::GlobalEtf,
+                currency: CurrencyCode::Usd,
+                in_portfolio: true,
+                is_watchlist: None,
+                quantity: Decimal::from(2),
+                avg_cost_cents: 38000,
+                current_price_cents: 40000, // $800.00 * 5.00 BRL/USD = R$ 4,000.00 (400,000 cents)
+                previous_close_cents: Some(39500),
+                dividend_yield_pct: None,
+                target_weight_pct: Decimal::from(50), // Underweight (33.33% < 50%)
+                alert_low_cents: None,
+                alert_high_cents: None,
+                thesis_md: "Core S&P 500".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let _a3 = svc
+            .create_asset(CreatePortfolioAssetRequest {
+                id: None,
+                symbol: "HGLG11.SA".to_string(),
+                name: "CSHG Logistica".to_string(),
+                asset_class: AssetClass::BrFii,
+                currency: CurrencyCode::Brl,
+                in_portfolio: true,
+                is_watchlist: None,
+                quantity: Decimal::from(25),
+                avg_cost_cents: 15500,
+                current_price_cents: 16000, // R$ 4,000.00 (400,000 cents)
+                previous_close_cents: Some(15900),
+                dividend_yield_pct: None,
+                target_weight_pct: Decimal::from(30), // Underweight after deposit
+                alert_low_cents: None,
+                alert_high_cents: None,
+                thesis_md: "Logistics FII".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Watchlist item (excluded from Waffle & Rebalancer)
+        let _watch = svc
+            .create_asset(CreatePortfolioAssetRequest {
+                id: None,
+                symbol: "BTC".to_string(),
+                name: "Bitcoin".to_string(),
+                asset_class: AssetClass::Crypto,
+                currency: CurrencyCode::Usd,
+                in_portfolio: false,
+                is_watchlist: Some(true),
+                quantity: Decimal::ZERO,
+                avg_cost_cents: 0,
+                current_price_cents: 9_000_000,
+                previous_close_cents: None,
+                dividend_yield_pct: None,
+                target_weight_pct: Decimal::ZERO,
+                alert_low_cents: None,
+                alert_high_cents: None,
+                thesis_md: "Watchlist only".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Verify PortfolioPriceAlert was emitted for PETR4.SA
+        let mut saw_price_alert = false;
+        while let Ok(ev) = events_rx.try_recv() {
+            if matches!(ev, SystemEvent::PortfolioPriceAlert { ref symbol, .. } if symbol == "PETR4.SA") {
+                saw_price_alert = true;
+            }
+        }
+        assert!(saw_price_alert, "Expected SystemEvent::PortfolioPriceAlert for PETR4.SA");
+
+        // 3. Verify 10x20 Waffle Grid has EXACTLY 200 tiles and Buy-Only Rebalancer has 0 sells
+        let alloc = svc
+            .get_portfolio_allocation(Some(CurrencyCode::Brl), Some(300_000))
+            .await
+            .expect("get_portfolio_allocation");
+        assert_eq!(alloc.total_brl_cents, 1_200_000);
+        assert_eq!(
+            alloc.waffle_tiles.len(),
+            200,
+            "10x20 Waffle Grid must contain exactly 200 tiles when portfolio value > 0"
+        );
+        let buy_sum: i64 = alloc
+            .recommendations
+            .iter()
+            .map(|r| {
+                assert!(
+                    r.recommended_buy_cents >= 0,
+                    "Buy-only rebalancer must never produce negative/sell recommendations"
+                );
+                r.recommended_buy_cents
+            })
+            .sum();
+        assert_eq!(buy_sum, 300_000);
+        let petr_rec = alloc
+            .recommendations
+            .iter()
+            .find(|r| r.symbol == "PETR4.SA")
+            .unwrap();
+        assert_eq!(
+            petr_rec.recommended_buy_cents, 0,
+            "Overweight holding PETR4.SA (33.33% > 20% target) must receive 0 buy cents"
+        );
+
+        // 4. Verify synthetic OHLCV candlesticks
+        let candles = svc
+            .get_asset_candles(a1.id, "1M")
+            .await
+            .expect("get_asset_candles");
+        assert_eq!(candles.candles.len(), 30);
+        for bar in &candles.candles {
+            assert!(bar.high_cents >= bar.open_cents.max(bar.close_cents));
+            assert!(bar.low_cents <= bar.open_cents.min(bar.close_cents));
+            assert!(bar.low_cents > 0);
+        }
+
+        // 5. Verify Macro 'YYYY-MM' Monthly Plan validation & cashflow computation
+        assert!(svc.get_monthly_plan("2026-13").await.is_err());
+        let plan = svc
+            .upsert_monthly_plan(
+                "2026-11",
+                UpsertMonthlyInvestmentPlanRequest {
+                    currency: CurrencyCode::Brl,
+                    fx_usd_brl: None,
+                    salary_income_cents: 2_500_000,
+                    other_income_cents: 0,
+                    planned_spend_cents: 1_000_000,
+                    actual_spend_cents: Some(900_000),
+                    planned_investment_cents: 1_500_000,
+                    actual_invested_cents: 1_600_000,
+                    allocations_json: serde_json::json!([]),
+                    notes_md: "November plan".to_string(),
+                },
+            )
+            .await
+            .expect("upsert_monthly_plan");
+        assert_eq!(plan.investable_surplus_cents, 1_600_000);
+        assert!(plan.savings_rate_pct > 60.0);
+
+        // 6. Verify FIRE Projection & What-If Simulator boundary cases
+        let fire = svc
+            .get_retirement_projection()
+            .await
+            .expect("get_retirement_projection");
+        assert!(fire.fi_target_brl_cents > 0);
+        assert!(fire.years_to_fi.is_finite());
+        assert!(!fire.unreachable);
+        assert!(!fire.trajectory.is_empty());
+
+        let unreachable_sim = svc
+            .simulate_retirement(FireSimulationRequest {
+                current_net_worth_brl_cents: Some(100_000),
+                monthly_contribution_brl_cents: Some(0),
+                monthly_retirement_spend_brl_cents: Some(1_000_000),
+                expected_real_return_pct: Some(Decimal::ZERO),
+                safe_withdrawal_rate_pct: Some(Decimal::from(4)),
+                current_age: Some(30),
+            })
+            .await
+            .expect("simulate unreachable FIRE");
+        assert!(unreachable_sim.unreachable);
+        assert_eq!(unreachable_sim.years_to_fi, 999.0);
+        assert!(unreachable_sim.projected_fi_date.is_none());
+
+        // 7. Verify 5-pillar Life Score rollup & enriched portfolio_fire widget refresh
+        let life_score = svc.compute_life_score().await.expect("compute_life_score");
+        assert!(life_score.composite_score > 0.0 && life_score.composite_score <= 100.0);
+        assert!(life_score.pillars.wealth > 50.0);
+
+        let dashboards = svc.list_dashboards().await.unwrap();
+        let wealth_deck = dashboards
+            .iter()
+            .find(|d| d.dashboard.slug == "wealth-fire" || d.dashboard.slug.contains("wealth"))
+            .unwrap_or(&dashboards[0]);
+        let wealth_detail = svc.get_dashboard(&wealth_deck.dashboard.slug).await.unwrap();
+        let waffle_widget = wealth_detail
+            .widgets
+            .iter()
+            .find(|w| {
+                w.source_config
+                    .get("builtin_key")
+                    .and_then(|v| v.as_str())
+                    == Some("portfolio_waffle")
+            })
+            .expect("seeded portfolio_waffle widget");
+        let refreshed_w = svc
+            .refresh_widget(waffle_widget.id)
+            .await
+            .expect("refresh portfolio_waffle widget");
+        let payload = refreshed_w.cached_payload.as_ref().expect("cached_payload");
+        assert_eq!(payload["total_brl_cents"], serde_json::json!(1_200_000));
+        assert_eq!(payload["waffle_tiles"].as_array().unwrap().len(), 200);
 
         test_db.teardown().await;
     }

@@ -107,14 +107,22 @@ impl Default for TimeCategory {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema, sqlx::Type)]
-#[sqlx(type_name = "TEXT", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "TEXT")]
 pub enum TimerMode {
+    #[serde(rename = "stopwatch")]
+    #[sqlx(rename = "stopwatch")]
     Stopwatch,
-    #[serde(alias = "pomodoro")]
+    #[serde(rename = "pomodoro_25_5", alias = "pomodoro", alias = "pomodoro25_5")]
+    #[sqlx(rename = "pomodoro_25_5")]
     Pomodoro25_5,
+    #[serde(rename = "pomodoro_50_10", alias = "pomodoro50_10")]
+    #[sqlx(rename = "pomodoro_50_10")]
     Pomodoro50_10,
+    #[serde(rename = "pomodoro_90_15", alias = "pomodoro90_15")]
+    #[sqlx(rename = "pomodoro_90_15")]
     Pomodoro90_15,
+    #[serde(rename = "pomodoro_custom", alias = "custom")]
+    #[sqlx(rename = "pomodoro_custom")]
     PomodoroCustom,
 }
 
@@ -190,9 +198,12 @@ pub struct Task {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateTaskRequest {
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
+    pub quick_capture: Option<String>,
     #[serde(default)]
     pub description_md: String,
     #[serde(default)]
@@ -208,7 +219,9 @@ pub struct CreateTaskRequest {
     pub blocked_by_task_ids: Vec<Uuid>,
     pub vault_note_path: Option<String>,
     pub scheduled_date: Option<NaiveDate>,
+    #[serde(alias = "due_at")]
     pub due_date: Option<DateTime<Utc>>,
+    #[serde(alias = "estimate_minutes")]
     pub estimated_minutes: Option<i32>,
     pub energy_level: Option<TaskEnergyLevel>,
     #[serde(default)]
@@ -231,7 +244,9 @@ pub struct UpdateTaskRequest {
     pub blocked_by_task_ids: Option<Vec<Uuid>>,
     pub vault_note_path: Option<String>,
     pub scheduled_date: Option<NaiveDate>,
+    #[serde(alias = "due_at")]
     pub due_date: Option<DateTime<Utc>>,
+    #[serde(alias = "estimate_minutes")]
     pub estimated_minutes: Option<i32>,
     pub actual_seconds: Option<i64>,
     pub energy_level: Option<TaskEnergyLevel>,
@@ -243,6 +258,46 @@ pub struct UpdateTaskRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdateTaskStatusRequest {
     pub status: TaskStatus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct TaskListFilter {
+    pub perspective: Option<String>,
+    pub status: Option<TaskStatus>,
+    pub project_id: Option<Uuid>,
+    pub goal_id: Option<Uuid>,
+    pub course_id: Option<Uuid>,
+    pub parent_task_id: Option<Uuid>,
+    pub priority: Option<TaskPriority>,
+    pub energy_level: Option<TaskEnergyLevel>,
+    pub due_before: Option<DateTime<Utc>>,
+    pub scheduled_date: Option<NaiveDate>,
+    pub tag: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct BulkUpdateTasksRequest {
+    pub task_ids: Vec<Uuid>,
+    pub status: Option<TaskStatus>,
+    pub priority: Option<TaskPriority>,
+    pub project_id: Option<Uuid>,
+    pub goal_id: Option<Uuid>,
+    pub energy_level: Option<TaskEnergyLevel>,
+    pub scheduled_date: Option<NaiveDate>,
+    #[serde(default)]
+    pub delete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct TodayCapacityMeter {
+    pub focus_capacity_minutes: i32,
+    pub planned_minutes: i32,
+    pub actual_minutes: i32,
+    pub actual_seconds: i64,
+    pub remaining_minutes: i32,
+    pub utilization_pct: f64,
+    pub overloaded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema, sqlx::FromRow)]
@@ -305,11 +360,15 @@ pub struct StartTimerRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct StopTimerRequest {
+    #[serde(default)]
     pub notes: Option<String>,
+    #[serde(default)]
+    pub duration_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct QuickCaptureParseRequest {
+    #[serde(alias = "input", alias = "text", alias = "query")]
     pub raw_input: String,
 }
 
@@ -320,9 +379,15 @@ pub struct QuickCaptureParsed {
     pub energy_level: Option<TaskEnergyLevel>,
     pub priority: TaskPriority,
     pub scheduled_date: Option<NaiveDate>,
+    pub due_at: Option<DateTime<Utc>>,
     pub estimated_minutes: Option<i32>,
+    pub estimate_minutes: Option<i32>,
+    pub status: TaskStatus,
     pub project_hint: Option<String>,
 }
+
+pub type TaskParseRequest = QuickCaptureParseRequest;
+pub type TaskParseResponse = QuickCaptureParsed;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct TimeStatsResponse {
@@ -331,6 +396,15 @@ pub struct TimeStatsResponse {
     pub deep_work_week_seconds: i64,
     pub learning_week_seconds: i64,
     pub hourly_buckets_24h: Vec<i64>,
+    #[serde(default)]
+    pub barcode_buckets_96: Vec<i64>,
+    #[serde(default)]
+    pub focus_capacity_minutes: i32,
+    #[serde(default)]
+    pub planned_today_minutes: i32,
+    #[serde(default)]
+    pub actual_today_minutes: i32,
+    pub capacity: TodayCapacityMeter,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -341,6 +415,24 @@ pub struct FlowNode {
     pub status: TaskStatus,
     pub x: f64,
     pub y: f64,
+    #[serde(default)]
+    pub node_kind: String,
+    #[serde(default)]
+    pub stage_label: String,
+    #[serde(default)]
+    pub is_blocked: bool,
+    #[serde(default)]
+    pub is_critical_path: bool,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub blocked_by_task_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub parent_task_id: Option<Uuid>,
+    #[serde(default)]
+    pub estimated_minutes: Option<i32>,
+    #[serde(default)]
+    pub actual_seconds: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -348,11 +440,27 @@ pub struct FlowEdge {
     pub from_id: Uuid,
     pub to_id: Uuid,
     pub edge_type: String,
+    #[serde(default)]
+    pub is_blocked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct FlowStageSummary {
+    pub stage: i32,
+    pub code: String,
+    pub label: String,
+    pub task_ids: Vec<Uuid>,
+    pub total_estimated_minutes: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct ProjectFlowTopologyResponse {
     pub project_id: Option<Uuid>,
+    pub hub_node: FlowNode,
+    pub stages: Vec<FlowStageSummary>,
     pub nodes: Vec<FlowNode>,
     pub edges: Vec<FlowEdge>,
+    pub dependency_arcs: Vec<FlowEdge>,
+    pub subtask_edges: Vec<FlowEdge>,
+    pub capacity: TodayCapacityMeter,
 }

@@ -1053,9 +1053,16 @@ impl LifeOpsService {
                 )
                 .fetch_one(&self.pool)
                 .await?;
+                let allocation = self.get_portfolio_allocation(None, None).await?;
+                let fire = self.get_retirement_projection().await?;
                 Ok(serde_json::json!({
                     "builtin_key": key,
                     "portfolio_asset_count": asset_count,
+                    "total_brl_cents": allocation.total_brl_cents,
+                    "total_usd_cents": allocation.total_usd_cents,
+                    "fx_usd_brl": allocation.fx_usd_brl,
+                    "waffle_tiles": allocation.waffle_tiles,
+                    "fire_projection": fire,
                 }))
             }
             "goals_courses" | "goals_blueprint" | "courses_momentum" | "second_brain_constellation" => {

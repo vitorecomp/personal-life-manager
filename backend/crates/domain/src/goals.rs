@@ -41,6 +41,7 @@ pub enum GoalPillar {
 #[serde(rename_all = "snake_case")]
 pub enum GoalStatus {
     NotStarted,
+    #[serde(alias = "active")]
     InProgress,
     Completed,
     Paused,
@@ -113,18 +114,33 @@ fn default_focus_cap() -> i32 {
     6
 }
 
+fn default_cycle_year() -> i32 {
+    2026
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpsertYearlyCycleRequest {
+    #[serde(default = "default_cycle_year")]
     pub year: i32,
     pub theme: String,
     #[serde(default)]
     pub vision_md: String,
     #[serde(default)]
     pub anti_goals_md: String,
-    #[serde(default = "default_focus_cap")]
+    #[serde(default = "default_focus_cap", alias = "focus_cap")]
     pub focus_cap_limit: i32,
     #[serde(default)]
     pub status: CycleStatus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct UpdateYearlyCycleRequest {
+    pub theme: Option<String>,
+    pub vision_md: Option<String>,
+    pub anti_goals_md: Option<String>,
+    #[serde(alias = "focus_cap")]
+    pub focus_cap_limit: Option<i32>,
+    pub status: Option<CycleStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema, sqlx::FromRow)]
@@ -140,7 +156,7 @@ pub struct Goal {
     pub target_date: Option<NaiveDate>,
     pub progress_pct: Decimal,
     pub confidence_score: i16,
-    #[sqlx(json)]
+    #[sqlx(json(nullable))]
     pub blueprint_pos: Option<BlueprintPos>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -148,6 +164,7 @@ pub struct Goal {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateGoalRequest {
+    #[serde(default = "default_cycle_year")]
     pub year: i32,
     pub pillar: GoalPillar,
     pub code: Option<String>,
@@ -196,10 +213,85 @@ pub struct GoalKeyResult {
     pub milestones_json: serde_json::Value,
     pub linked_entity_id: Option<Uuid>,
     pub weight: Decimal,
-    #[sqlx(json)]
+    #[sqlx(json(nullable))]
     pub blueprint_pos: Option<BlueprintPos>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl GoalKeyResult {
+    pub fn computed_progress_pct(&self) -> Decimal {
+        match self.metric_type {
+            KrMetricType::Binary => {
+                if (self.target_value > Decimal::ZERO && self.current_value >= self.target_value)
+                    || self.current_value >= Decimal::ONE
+                {
+                    Decimal::from(100)
+                } else {
+                    Decimal::ZERO
+                }
+            }
+            KrMetricType::Milestones => {
+                if let Some(arr) = self.milestones_json.as_array() {
+                    if !arr.is_empty() {
+                        let mut total_w = 0.0_f64;
+                        let mut done_w = 0.0_f64;
+                        for item in arr {
+                            let w = item
+                                .get("weight")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(1.0)
+                                .max(0.0);
+                            let done = item
+                                .get("done")
+                                .and_then(|v| v.as_bool())
+                                .or_else(|| item.get("completed").and_then(|v| v.as_bool()))
+                                .unwrap_or(false);
+                            total_w += w;
+                            if done {
+                                done_w += w;
+                            }
+                        }
+                        if total_w > 0.0 {
+                            let pct = ((done_w / total_w) * 100.0).clamp(0.0, 100.0);
+                            return Decimal::from_f64_retain(pct)
+                                .unwrap_or(Decimal::ZERO)
+                                .round_dp(2);
+                        }
+                        return Decimal::ZERO;
+                    }
+                }
+                if self.target_value == self.start_value {
+                    if self.current_value >= self.target_value {
+                        Decimal::from(100)
+                    } else {
+                        Decimal::ZERO
+                    }
+                } else {
+                    (((self.current_value - self.start_value)
+                        / (self.target_value - self.start_value))
+                        * Decimal::from(100))
+                    .clamp(Decimal::ZERO, Decimal::from(100))
+                    .round_dp(2)
+                }
+            }
+            _ => {
+                if self.target_value == self.start_value {
+                    if self.current_value >= self.target_value {
+                        Decimal::from(100)
+                    } else {
+                        Decimal::ZERO
+                    }
+                } else {
+                    (((self.current_value - self.start_value)
+                        / (self.target_value - self.start_value))
+                        * Decimal::from(100))
+                    .clamp(Decimal::ZERO, Decimal::from(100))
+                    .round_dp(2)
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -263,6 +355,10 @@ pub struct CreateGoalCheckinRequest {
     pub blockers_md: String,
     #[serde(default)]
     pub next_steps_md: String,
+    #[serde(default)]
+    pub kr_id: Option<Uuid>,
+    #[serde(default, alias = "current_value")]
+    pub kr_current_value: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -270,7 +366,48 @@ pub struct GoalWithDetails {
     #[serde(flatten)]
     pub goal: Goal,
     pub pace_status: PaceHealthStatus,
+    #[serde(default)]
+    pub elapsed_pct: Decimal,
+    #[serde(default)]
+    pub invested_seconds: i64,
+    #[serde(default)]
+    pub invested_hours: f64,
+    #[serde(default = "default_focus_cap")]
+    pub focus_cap_limit: i32,
+    #[serde(default)]
+    pub active_goals_in_cycle: i32,
+    #[serde(default)]
+    pub focus_cap_exceeded: bool,
+    #[serde(default)]
+    pub focus_cap_warning: Option<String>,
     pub key_results: Vec<GoalKeyResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct BlueprintTitleBlock {
+    pub year: i32,
+    pub theme: String,
+    pub status: CycleStatus,
+    pub days_elapsed: i32,
+    pub days_total: i32,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct BlueprintQuarterMatrixCell {
+    pub quarter: OkrQuarter,
+    pub pillar: GoalPillar,
+    pub deliverables: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct BlueprintPillarZone {
+    pub pillar: GoalPillar,
+    pub label: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -283,6 +420,17 @@ pub struct BlueprintNode {
     pub x: f64,
     pub y: f64,
     pub progress_pct: Decimal,
+    pub pillar: GoalPillar,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub width: f64,
+    #[serde(default)]
+    pub height: f64,
+    #[serde(default)]
+    pub is_north_star_beacon: bool,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -290,11 +438,23 @@ pub struct BlueprintCorridor {
     pub from_id: Uuid,
     pub to_id: Uuid,
     pub waypoints: Vec<BlueprintPos>,
+    #[serde(default)]
+    pub style: String,
+    #[serde(default)]
+    pub polyline: Vec<[i32; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct BlueprintLayoutResponse {
     pub year: i32,
+    pub cycle: YearlyCycle,
+    pub title_block: BlueprintTitleBlock,
     pub nodes: Vec<BlueprintNode>,
     pub corridors: Vec<BlueprintCorridor>,
+    #[serde(default)]
+    pub quarter_matrix: Vec<BlueprintQuarterMatrixCell>,
+    #[serde(default)]
+    pub pillar_zones: Vec<BlueprintPillarZone>,
+    #[serde(default)]
+    pub strategist_notes_md: String,
 }

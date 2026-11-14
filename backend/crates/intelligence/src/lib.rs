@@ -776,6 +776,89 @@ mod tests {
             .expect("dry_run must succeed even when HP is 0");
         assert!(dry_while_paused.is_dry_run);
 
+        // 5b. Increasing monthly_budget_cents via update_agent unpauses Knight from StandbyBarracks
+        // and live dispatch_agent(dry_run: false) calls POST /v1/runs with X-Hermes-Session-Key when online
+        let unpaused = svc
+            .update_agent(
+                artificer.agent.id,
+                UpdateAgentRequest {
+                    monthly_budget_cents: Some(500),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update_agent budget increase");
+        assert_eq!(unpaused.hp_remaining_cents, 400);
+        assert_ne!(unpaused.agent.grid_pos.zone, ArenaZone::StandbyBarracks);
+        assert!(!unpaused.is_paused);
+
+        let runs_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let runs_hits_clone = runs_hits.clone();
+        let mock_runs_app = Router::new()
+            .route(
+                "/v1/models",
+                get(|| async { AxumJson(json!({"data": [{"id": "hermes-3-llama-3.1-70b"}]})) }),
+            )
+            .route(
+                "/v1/runs",
+                post(move |headers: HeaderMap, AxumJson(body): AxumJson<Value>| {
+                    let hits = runs_hits_clone.clone();
+                    async move {
+                        let sess_hdr = headers
+                            .get("x-hermes-session-key")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("");
+                        assert!(
+                            sess_hdr.starts_with("sess_knight_"),
+                            "Expected X-Hermes-Session-Key header on /v1/runs, got '{sess_hdr}'"
+                        );
+                        assert_eq!(body["agent_slug"].as_str(), Some("artificer-daedalus"));
+                        hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        AxumJson(json!({
+                            "output": format!("Online /v1/runs report for {sess_hdr}"),
+                            "usage": {
+                                "input_tokens": 120,
+                                "output_tokens": 80
+                            }
+                        }))
+                    }
+                }),
+            );
+        let runs_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let runs_addr = runs_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(runs_listener, mock_runs_app).await;
+        });
+
+        let online_knight_svc = svc
+            .clone()
+            .with_gateway_url(format!("http://{runs_addr}/v1"));
+        let online_run = online_knight_svc
+            .dispatch_agent(
+                "artificer-daedalus",
+                DispatchAgentRequest {
+                    dry_run: Some(false),
+                    sample_input: Some("Verify /v1/runs after budget unpause".to_string()),
+                    trigger_id: None,
+                    tool_call: None,
+                    estimated_cost_cents: Some(10),
+                },
+            )
+            .await
+            .expect("live dispatch after budget unpause must succeed");
+        assert_eq!(runs_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(online_run.status, AgentRunStatus::Succeeded);
+        assert_eq!(online_run.input_tokens, 120);
+        assert_eq!(online_run.output_tokens, 80);
+        let steps_arr = online_run.steps_trace.as_array().unwrap();
+        assert!(steps_arr.iter().any(|s| {
+            s.get("kind").and_then(|v| v.as_str()) == Some("knight_synthesis")
+                && s.get("gateway_mode").and_then(|v| v.as_str()) == Some("online")
+                && s.get("output")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|o| o.contains("Online /v1/runs report"))
+        }));
+
         // 6. Event-driven trigger (`PortfolioPriceAlert` -> dispatches `vanguard-aurum`)
         let event_runs = svc
             .handle_system_event(&SystemEvent::PortfolioPriceAlert {
@@ -792,16 +875,6 @@ mod tests {
         assert_eq!(event_runs.len(), 1);
 
         // Clean up custom agent
-        let _ = svc
-            .update_agent(
-                artificer.agent.id,
-                UpdateAgentRequest {
-                    monthly_budget_cents: Some(500),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("update_agent");
         svc.delete_agent(artificer.agent.id)
             .await
             .expect("delete_agent");
@@ -977,7 +1050,7 @@ mod tests {
             .await
             .unwrap();
 
-        // (d) Unlogged daily routine
+        // (d) Unlogged daily routine + off-day custom routine item
         let create_routine_req: CreateRoutineRequest = serde_json::from_value(json!({
             "name": "Morning Tactical Stack",
             "time_slot": "morning",
@@ -995,9 +1068,27 @@ mod tests {
             "frequency_type": "daily"
         }))
         .unwrap();
-        let _routine_item = svc
+        let routine_item = svc
             .life_ops
             .create_routine_item(routine.routine.id, create_item_req)
+            .await
+            .unwrap();
+
+        let today_iso_day = {
+            use chrono::Datelike;
+            today.weekday().number_from_monday() as i64
+        };
+        let off_day = if today_iso_day == 1 { 2 } else { 1 };
+        let off_day_item_req: CreateRoutineItemRequest = serde_json::from_value(json!({
+            "title": "Off-Day Only Habit",
+            "tracking_type": "boolean",
+            "frequency_type": "custom",
+            "frequency_config": { "days": [off_day] }
+        }))
+        .unwrap();
+        let off_day_item = svc
+            .life_ops
+            .create_routine_item(routine.routine.id, off_day_item_req)
             .await
             .unwrap();
 
@@ -1039,7 +1130,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify all 6 categories are present in get_companion_nudges()
+        // Verify all 6 categories are present in get_companion_nudges(), and off_day_item is excluded
         let nudges = svc
             .get_companion_nudges()
             .await
@@ -1057,6 +1148,34 @@ mod tests {
                 "Missing expected nudge category '{expected_cat}' in {nudges:?}"
             );
         }
+        assert!(
+            !nudges
+                .iter()
+                .any(|n| n.entity_id.as_deref() == Some(&off_day_item.id.to_string())),
+            "Off-day routine item must NOT emit an unlogged_routine nudge today"
+        );
+
+        // Logging the scheduled routine item as Completed ('completed') clears its unlogged_routine nudge
+        svc.life_ops
+            .log_routine_item(hermes_domain::LogRoutineItemRequest {
+                routine_item_id: routine_item.id,
+                log_date: Some(today),
+                status: hermes_domain::RoutineLogStatus::Completed,
+                numeric_value: None,
+                notes: String::new(),
+            })
+            .await
+            .expect("log_routine_item as Completed");
+        let nudges_after_log = svc
+            .get_companion_nudges()
+            .await
+            .expect("get_companion_nudges after logging routine");
+        assert!(
+            !nudges_after_log
+                .iter()
+                .any(|n| n.category == "unlogged_routine"),
+            "Expected unlogged_routine nudges to be cleared after Completed log, got {nudges_after_log:?}"
+        );
 
         // 2. Verify Companion Offline Phrases CRUD & sync_change_log mobile delta sync
         let initial_phrases = svc

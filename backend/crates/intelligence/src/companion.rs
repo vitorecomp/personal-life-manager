@@ -125,7 +125,7 @@ impl IntelligenceService {
         // 4. Unlogged Daily Routines
         let routine_rows = sqlx::query(
             r#"
-            SELECT ri.id, ri.title, r.name AS routine_name
+            SELECT ri.id, ri.title, ri.frequency_type, ri.frequency_config, r.name AS routine_name
             FROM routine_items ri
             JOIN routines r ON r.id = ri.routine_id
             WHERE ri.deleted_at IS NULL
@@ -136,10 +136,9 @@ impl IntelligenceService {
                   WHERE rl.routine_item_id = ri.id
                     AND rl.log_date = $1
                     AND rl.deleted_at IS NULL
-                    AND rl.status IN ('done', 'skipped')
+                    AND rl.status IN ('completed', 'done', 'skipped')
               )
             ORDER BY r.sort_order ASC, ri.sort_order ASC
-            LIMIT 5
             "#,
         )
         .bind(today)
@@ -147,7 +146,17 @@ impl IntelligenceService {
         .await
         .map_err(ApiError::from)?;
 
-        for row in routine_rows {
+        for row in routine_rows
+            .into_iter()
+            .filter(|row| {
+                let frequency_type: String = row.try_get("frequency_type").unwrap_or_default();
+                let frequency_config: serde_json::Value = row
+                    .try_get("frequency_config")
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                is_routine_item_scheduled_for_date(&frequency_type, &frequency_config, today)
+            })
+            .take(2)
+        {
             let item_id: Uuid = row.get("id");
             let item_title: String = row.get("title");
             let routine_name: String = row.get("routine_name");
@@ -315,5 +324,45 @@ impl IntelligenceService {
             )));
         }
         Ok(())
+    }
+}
+
+fn is_routine_item_scheduled_for_date(
+    frequency_type: &str,
+    frequency_config: &serde_json::Value,
+    date: chrono::NaiveDate,
+) -> bool {
+    use chrono::Datelike;
+    let iso_day = date.weekday().number_from_monday() as i64; // 1 = Mon .. 7 = Sun
+    let (short_name, full_name) = match date.weekday() {
+        chrono::Weekday::Mon => ("mon", "monday"),
+        chrono::Weekday::Tue => ("tue", "tuesday"),
+        chrono::Weekday::Wed => ("wed", "wednesday"),
+        chrono::Weekday::Thu => ("thu", "thursday"),
+        chrono::Weekday::Fri => ("fri", "friday"),
+        chrono::Weekday::Sat => ("sat", "saturday"),
+        chrono::Weekday::Sun => ("sun", "sunday"),
+    };
+
+    if let Some(days_arr) = frequency_config.get("days").and_then(|v| v.as_array()) {
+        if !days_arr.is_empty() {
+            return days_arr.iter().any(|elem| {
+                if let Some(n) = elem.as_i64() {
+                    n == iso_day || (iso_day == 7 && n == 0)
+                } else if let Some(s) = elem.as_str() {
+                    let trimmed = s.trim();
+                    trimmed.eq_ignore_ascii_case(short_name)
+                        || trimmed.eq_ignore_ascii_case(full_name)
+                } else {
+                    false
+                }
+            });
+        }
+    }
+
+    if frequency_type.eq_ignore_ascii_case("weekdays") {
+        iso_day <= 5
+    } else {
+        true
     }
 }

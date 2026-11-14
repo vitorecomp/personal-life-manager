@@ -331,7 +331,8 @@ impl IntelligenceService {
         let knight_archetype = req.knight_archetype.unwrap_or(existing.knight_archetype);
         let crest_color = req.crest_color.unwrap_or(existing.crest_color);
         let sprite_sheet_id = req.sprite_sheet_id.or(existing.sprite_sheet_id);
-        let grid_pos = req.grid_pos.unwrap_or(existing.grid_pos);
+        let req_grid_pos_is_none = req.grid_pos.is_none();
+        let mut grid_pos = req.grid_pos.unwrap_or(existing.grid_pos);
         let hermes_profile = req.hermes_profile.or(existing.hermes_profile);
         let system_prompt = if let Some(sp) = req.system_prompt {
             let t = sp.trim();
@@ -352,6 +353,31 @@ impl IntelligenceService {
                 "monthly_budget_cents must be non-negative",
             ));
         }
+
+        // If the Knight was in StandbyBarracks due to the HP circuit breaker and the caller
+        // did not pass an explicit grid_pos, unpause back to CronWatchtower when monthly_budget_cents
+        // exceeds current month's spend.
+        if req_grid_pos_is_none && grid_pos.zone == ArenaZone::StandbyBarracks {
+            let spend_row = sqlx::query(
+                r#"
+                SELECT
+                    COALESCE(ROUND(SUM(estimated_cost_usd) * 100.0)::BIGINT, 0) AS spent_month_cents
+                FROM agent_runs
+                WHERE agent_id = $1
+                  AND is_dry_run = FALSE
+                  AND started_at >= date_trunc('month', NOW() AT TIME ZONE 'UTC')
+                "#,
+            )
+            .bind(existing.id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(ApiError::from)?;
+            let spent_month_cents: i64 = spend_row.try_get("spent_month_cents").unwrap_or(0);
+            if monthly_budget_cents > spent_month_cents {
+                grid_pos.zone = ArenaZone::CronWatchtower;
+            }
+        }
+
         let is_mastermind_member = req
             .is_mastermind_member
             .unwrap_or(existing.is_mastermind_member);
@@ -685,12 +711,7 @@ impl IntelligenceService {
         let is_dry_run = req.dry_run.unwrap_or(false);
 
         if !is_dry_run {
-            let projected_extra_cents = req.estimated_cost_cents.unwrap_or(0).max(0);
-            let would_exceed = agent_telemetry.hp_remaining_cents <= 0
-                || (projected_extra_cents > 0
-                    && agent_telemetry.spent_month_cents + projected_extra_cents
-                        > agent_telemetry.agent.monthly_budget_cents
-                    && agent_telemetry.hp_remaining_cents <= 0);
+            let would_exceed = agent_telemetry.hp_remaining_cents <= 0;
 
             if !agent_telemetry.agent.enabled
                 || agent_telemetry.agent.grid_pos.zone == ArenaZone::StandbyBarracks
@@ -887,13 +908,112 @@ impl IntelligenceService {
                 }
             }
 
-            let gateway_mode = self.check_gateway_health().await;
-            let report_text = format!(
-                "Knight '{}' ({:?}) executed mission under `{gateway_mode}`. Input: {:?}.",
+            let mut gateway_mode = "offline_mock".to_string();
+            let mut report_text = format!(
+                "Knight '{}' ({:?}) executed mission under `offline_mock`. Input: {:?}.",
                 agent_telemetry.agent.name,
                 agent_telemetry.agent.knight_archetype,
                 req.sample_input
             );
+            let mut resolved_in_tokens = ((rendered_soul.len() / 4).max(64)) as i32;
+            let mut resolved_out_tokens = ((report_text.len() / 4).max(48)) as i32;
+            let mut gateway_cost_cents: Option<i64> = None;
+
+            let base = self.gateway_url.trim_end_matches('/');
+            if !base.is_empty()
+                && !base.eq_ignore_ascii_case("offline")
+                && !base.eq_ignore_ascii_case("mock")
+                && !base.eq_ignore_ascii_case("offline_mock")
+            {
+                let runs_url = format!("{base}/runs");
+                let model = agent_telemetry
+                    .agent
+                    .model_config
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("hermes-3-llama-3.1-70b");
+                let runs_body = serde_json::json!({
+                    "agent_id": agent_telemetry.agent.id,
+                    "agent_slug": agent_telemetry.agent.slug,
+                    "profile": agent_telemetry.agent.hermes_profile,
+                    "model": model,
+                    "system_prompt": rendered_soul,
+                    "input": req.sample_input,
+                    "session_key": session_key,
+                    "tool_calls": req.tool_call,
+                });
+
+                let mut http_req = self
+                    .http_client
+                    .post(&runs_url)
+                    .timeout(std::time::Duration::from_millis(2000))
+                    .header("X-Hermes-Session-Key", &session_key)
+                    .json(&runs_body);
+                if let Some(ref key) = self.gateway_api_key {
+                    http_req = http_req.bearer_auth(key);
+                }
+
+                if let Ok(resp) = http_req.send().await {
+                    if resp.status().is_success() {
+                        gateway_mode = "online".to_string();
+                        let fallback_online_report = format!(
+                            "Knight '{}' ({:?}) executed mission under `online`. Input: {:?}.",
+                            agent_telemetry.agent.name,
+                            agent_telemetry.agent.knight_archetype,
+                            req.sample_input
+                        );
+                        let raw_text = resp.text().await.unwrap_or_default();
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw_text) {
+                            let extracted = val
+                                .get("output")
+                                .and_then(|v| v.as_str())
+                                .or_else(|| val.get("result").and_then(|v| v.as_str()))
+                                .or_else(|| val.get("content").and_then(|v| v.as_str()))
+                                .or_else(|| {
+                                    val.pointer("/choices/0/message/content")
+                                        .and_then(|v| v.as_str())
+                                })
+                                .filter(|s| !s.trim().is_empty());
+                            report_text = extracted
+                                .map(ToString::to_string)
+                                .unwrap_or(fallback_online_report);
+
+                            if let Some(in_tok) = val
+                                .pointer("/usage/input_tokens")
+                                .or_else(|| val.get("input_tokens"))
+                                .or_else(|| val.pointer("/usage/prompt_tokens"))
+                                .and_then(|v| v.as_i64())
+                                .filter(|&n| n > 0)
+                            {
+                                resolved_in_tokens = in_tok as i32;
+                            }
+                            if let Some(out_tok) = val
+                                .pointer("/usage/output_tokens")
+                                .or_else(|| val.get("output_tokens"))
+                                .or_else(|| val.pointer("/usage/completion_tokens"))
+                                .and_then(|v| v.as_i64())
+                                .filter(|&n| n > 0)
+                            {
+                                resolved_out_tokens = out_tok as i32;
+                            } else {
+                                resolved_out_tokens = ((report_text.len() / 4).max(48)) as i32;
+                            }
+                            if let Some(cc) = val
+                                .get("cost_cents")
+                                .and_then(|v| v.as_i64())
+                                .filter(|&c| c > 0)
+                            {
+                                gateway_cost_cents = Some(cc);
+                            }
+                        } else if !raw_text.trim().is_empty() {
+                            report_text = raw_text.trim().to_string();
+                            resolved_out_tokens = ((report_text.len() / 4).max(48)) as i32;
+                        } else {
+                            report_text = fallback_online_report;
+                        }
+                    }
+                }
+            }
 
             steps.push(serde_json::json!({
                 "step": steps.len() + 1,
@@ -902,10 +1022,14 @@ impl IntelligenceService {
                 "output": report_text,
             }));
 
-            input_tokens = ((rendered_soul.len() / 4).max(64)) as i32;
-            output_tokens = ((report_text.len() / 4).max(48)) as i32;
+            input_tokens = resolved_in_tokens;
+            output_tokens = resolved_out_tokens;
 
-            let cost_cents = req.estimated_cost_cents.unwrap_or(5).max(1);
+            let cost_cents = req
+                .estimated_cost_cents
+                .or(gateway_cost_cents)
+                .unwrap_or(5)
+                .max(1);
             // Convert cents -> USD (`100 cents = $1.000000`)
             estimated_cost_usd = Decimal::new(cost_cents * 10_000, 6);
         }

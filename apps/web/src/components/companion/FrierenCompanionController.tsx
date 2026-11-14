@@ -1,0 +1,333 @@
+import React, { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  CompanionStage,
+  type CompanionApprovalRequest,
+  type CompanionChatMessage,
+  type CompanionNudge,
+  type CompanionUndoAction,
+} from '@hermes/ui';
+import {
+  apiGet,
+  apiPost,
+  streamHermesChat,
+  unwrapList,
+  type CompanionNudgeRecord,
+  type HermesSessionRecord,
+  type McpUndoRecord,
+  type PendingApprovalRecord,
+} from '../../api/client';
+import { useAppStore } from '../../store/appStore';
+
+export interface FrierenCompanionControllerProps {
+  pathname: string;
+  gatewayMode?: 'online' | 'offline_mock';
+  onNavigate: (to: string) => void;
+  mode: 'ledge' | 'popover';
+}
+
+export function FrierenCompanionController({
+  pathname,
+  gatewayMode = 'online',
+  onNavigate,
+  mode,
+}: FrierenCompanionControllerProps) {
+  const queryClient = useQueryClient();
+  const companionOpen = useAppStore((s) => s.companionOpen);
+  const setCompanionOpen = useAppStore((s) => s.setCompanionOpen);
+  const activeSessionKey = useAppStore((s) => s.activeSessionKey);
+  const setActiveSessionKey = useAppStore((s) => s.setActiveSessionKey);
+  const activeDashboardId = useAppStore((s) => s.activeDashboardId);
+  const selectedEntityId = useAppStore((s) => s.selectedEntityId);
+  const selectedEntityLabel = useAppStore((s) => s.selectedEntityLabel);
+
+  const [localMessages, setLocalMessages] = useState<CompanionChatMessage[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+
+  // Escape key closes the popover cleanly (Cmd+J / Ctrl+J is handled by CompanionStage mode="popover")
+  useEffect(() => {
+    if (mode !== 'popover' || !companionOpen) return undefined;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setCompanionOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mode, companionOpen, setCompanionOpen]);
+
+  // Discover latest session from /api/hermes/sessions so API-initiated Frieren sessions are synced
+  useQuery({
+    queryKey: ['hermes-sessions-sync'],
+    queryFn: async () => {
+      try {
+        const res = await apiGet<any>('/api/hermes/sessions');
+        const list = unwrapList<HermesSessionRecord>(res, ['sessions']);
+        if (list.length > 0 && list[0]?.session_key) {
+          if (activeSessionKey === 'hermes-primary-session') {
+            setActiveSessionKey(list[0].session_key);
+          }
+        }
+        return list;
+      } catch {
+        return [];
+      }
+    },
+    enabled: mode === 'popover',
+  });
+
+  // Load current session history
+  const { data: sessionDetail } = useQuery({
+    queryKey: ['hermes-session', activeSessionKey],
+    queryFn: async () => {
+      try {
+        const res = await apiGet<any>(
+          `/api/hermes/sessions/${encodeURIComponent(activeSessionKey)}`,
+        );
+        return (res?.data ?? res) as HermesSessionRecord | null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: mode === 'popover' && Boolean(activeSessionKey),
+  });
+
+  // Proactive nudges
+  const { data: rawNudges = [] } = useQuery({
+    queryKey: ['companion-nudges'],
+    queryFn: async () => {
+      try {
+        const res = await apiGet<any>('/api/companion/nudges');
+        return unwrapList<CompanionNudgeRecord>(res, ['nudges', 'active_nudges']);
+      } catch {
+        return [];
+      }
+    },
+  });
+
+  // Pending Tier 3 MCP approvals
+  const { data: rawApprovals = [] } = useQuery({
+    queryKey: ['mcp-approvals'],
+    queryFn: async () => {
+      try {
+        const res = await apiGet<any>('/api/mcp/approvals');
+        return unwrapList<PendingApprovalRecord>(res, ['approvals']);
+      } catch {
+        return [];
+      }
+    },
+    enabled: mode === 'popover',
+  });
+
+  // Tier 2 MCP Undo actions
+  const { data: rawUndos = [] } = useQuery({
+    queryKey: ['mcp-undo'],
+    queryFn: async () => {
+      try {
+        const res = await apiGet<any>('/api/mcp/undo');
+        return unwrapList<McpUndoRecord>(res, ['undo_actions', 'undos', 'actions']);
+      } catch {
+        return [];
+      }
+    },
+    enabled: mode === 'popover',
+  });
+
+  const dismissNudgeMutation = useMutation({
+    mutationFn: async (nudgeId: string) =>
+      apiPost(`/api/companion/nudges/${encodeURIComponent(nudgeId)}/dismiss`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['companion-nudges'] });
+    },
+  });
+
+  const undoMutation = useMutation({
+    mutationFn: async (undoId: string) =>
+      apiPost(`/api/mcp/undo/${encodeURIComponent(undoId)}`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-undo'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+    },
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: async ({
+      id,
+      payloadJson,
+    }: {
+      id: string;
+      payloadJson?: Record<string, unknown> | string;
+    }) =>
+      apiPost(`/api/mcp/approvals/${encodeURIComponent(id)}/approve`, {
+        payload_json: payloadJson,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: async (id: string) =>
+      apiPost(`/api/mcp/approvals/${encodeURIComponent(id)}/reject`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-approvals'] });
+    },
+  });
+
+  const nudges: CompanionNudge[] = rawNudges.map((n) => ({
+    id: String(n.id),
+    title: String(n.title || 'TACTICAL_NUDGE'),
+    message: String(n.message || ''),
+    module: n.category || 'general',
+  }));
+
+  const pendingApprovals: CompanionApprovalRequest[] = rawApprovals
+    .filter((a) => String(a.status || 'pending').toLowerCase() === 'pending')
+    .map((a) => ({
+      id: String(a.id),
+      toolName: String(a.tool_name || 'mcp_tool'),
+      summary: `Pending Tier-3 approval for ${a.tool_name}`,
+      payloadJson: a.payload_json ?? {},
+      status: 'pending',
+    }));
+
+  const undoActions: CompanionUndoAction[] = rawUndos
+    .filter((u) => !u.reverted)
+    .map((u) => ({
+      undoId: String(u.undo_id ?? u.id),
+      toolName: String(u.tool_name || 'mcp_action'),
+      summary: `${u.entity_table || 'entity'} modified`,
+      undone: Boolean(u.reverted),
+    }));
+
+  const serverMessages: CompanionChatMessage[] = (
+    sessionDetail?.messages ??
+    sessionDetail?.messages_json ??
+    []
+  ).map((m, idx) => ({
+    id: String(m.id ?? `srv-${idx}`),
+    role: m.role || 'assistant',
+    content: String(m.content || ''),
+    thinkingText: m.thinking,
+  }));
+
+  const combinedMessages =
+    localMessages.length > 0 ? [...serverMessages, ...localMessages] : serverMessages;
+
+  const pageContext = {
+    activeRoute: pathname,
+    activeDashboardId,
+    selectedEntityId,
+    selectedEntityLabel,
+  };
+
+  if (mode === 'ledge') {
+    return (
+      <CompanionStage
+        mode="ledge"
+        online
+        gatewayMode={gatewayMode}
+        scale={2}
+        nudges={nudges}
+        open={companionOpen}
+        onOpenChange={setCompanionOpen}
+        onSelectNudge={() => setCompanionOpen(true)}
+      />
+    );
+  }
+
+  const handleSendMessage = async (text: string) => {
+    const userMsg: CompanionChatMessage = {
+      id: `usr-${Date.now()}`,
+      role: 'user',
+      content: text,
+    };
+    const asstId = `asst-${Date.now() + 1}`;
+    setLocalMessages((prev) => [
+      ...prev,
+      userMsg,
+      { id: asstId, role: 'assistant', content: '...', isStreaming: true },
+    ]);
+    setIsStreaming(true);
+
+    try {
+      let streamedText = '';
+      await streamHermesChat(
+        {
+          sessionKey: activeSessionKey,
+          message: text,
+          origin: 'frieren_popover',
+          pageContext: {
+            active_route: pathname,
+            active_dashboard_id: activeDashboardId,
+            selected_entity_id: selectedEntityId,
+          },
+        },
+        {
+          onToken: (delta) => {
+            streamedText += delta;
+            setLocalMessages((prev) =>
+              prev.map((m) => (m.id === asstId ? { ...m, content: streamedText } : m)),
+            );
+          },
+          onDone: (finalText) => {
+            setLocalMessages((prev) =>
+              prev.map((m) =>
+                m.id === asstId ? { ...m, content: finalText, isStreaming: false } : m,
+              ),
+            );
+          },
+        },
+      );
+      queryClient.invalidateQueries({ queryKey: ['hermes-session', activeSessionKey] });
+      queryClient.invalidateQueries({ queryKey: ['mcp-undo'] });
+      queryClient.invalidateQueries({ queryKey: ['mcp-approvals'] });
+    } catch {
+      setLocalMessages((prev) =>
+        prev.map((m) =>
+          m.id === asstId
+            ? {
+                ...m,
+                content: `[OFFLINE_MOCK] Tactical note recorded on ${pathname}.`,
+                isStreaming: false,
+              }
+            : m,
+        ),
+      );
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
+  return (
+    <CompanionStage
+      mode="popover"
+      className="fixed bottom-4 right-4 z-50 w-[420px] max-w-[95vw]"
+      online
+      gatewayMode={gatewayMode}
+      scale={2}
+      sessionKey={activeSessionKey}
+      pageContext={pageContext}
+      open={companionOpen}
+      onOpenChange={setCompanionOpen}
+      onExpandToHermes={(key) => {
+        if (key) setActiveSessionKey(key);
+        setCompanionOpen(false);
+        onNavigate('/hermes');
+      }}
+      nudges={nudges}
+      onDismissNudge={(id) => dismissNudgeMutation.mutate(id)}
+      messages={combinedMessages}
+      isStreaming={isStreaming}
+      onSendMessage={handleSendMessage}
+      undoActions={undoActions}
+      onUndo={(undoId) => undoMutation.mutate(undoId)}
+      pendingApprovals={pendingApprovals}
+      onApprove={(id, payloadJson) => approveMutation.mutate({ id, payloadJson })}
+      onReject={(id) => rejectMutation.mutate(id)}
+    />
+  );
+}

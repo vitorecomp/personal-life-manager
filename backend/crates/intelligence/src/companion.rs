@@ -49,7 +49,7 @@ impl IntelligenceService {
                 row.try_get("effective_due").unwrap_or(today);
             let is_overdue = effective_due < today;
             nudges.push(CompanionNudge {
-                id: new_uuid_v7(),
+                id: task_id,
                 category: if is_overdue {
                     "overdue_task".to_string()
                 } else {
@@ -90,7 +90,7 @@ impl IntelligenceService {
                     PaceHealthStatus::OnTrack => "on_track",
                 };
                 nudges.push(CompanionNudge {
-                    id: new_uuid_v7(),
+                    id: d.goal.id,
                     category: "goal_pace".to_string(),
                     title: format!("Goal Pace Alert: {}", d.goal.title),
                     message: format!(
@@ -108,7 +108,7 @@ impl IntelligenceService {
         if let Ok(reviews) = self.life_ops.list_due_spaced_reviews().await {
             for r in reviews.into_iter().take(5) {
                 nudges.push(CompanionNudge {
-                    id: new_uuid_v7(),
+                    id: r.lesson.id,
                     category: "spaced_review".to_string(),
                     title: format!("Spaced Review Due: {}", r.lesson.title),
                     message: format!(
@@ -161,7 +161,7 @@ impl IntelligenceService {
             let item_title: String = row.get("title");
             let routine_name: String = row.get("routine_name");
             nudges.push(CompanionNudge {
-                id: new_uuid_v7(),
+                id: item_id,
                 category: "unlogged_routine".to_string(),
                 title: format!("Unlogged Routine: {item_title}"),
                 message: format!(
@@ -194,7 +194,7 @@ impl IntelligenceService {
             let host: String = row.get("host");
             let status: String = row.get("status");
             nudges.push(CompanionNudge {
-                id: new_uuid_v7(),
+                id: srv_id,
                 category: "server_health".to_string(),
                 title: format!("Server Alert: {name} ({status})"),
                 message: format!(
@@ -226,7 +226,7 @@ impl IntelligenceService {
             let session_key: String = row.get("session_key");
             let tool_name: String = row.get("tool_name");
             nudges.push(CompanionNudge {
-                id: new_uuid_v7(),
+                id: approval_id,
                 category: "pending_approval".to_string(),
                 title: format!("Pending MCP Approval: {tool_name}"),
                 message: format!(
@@ -239,7 +239,16 @@ impl IntelligenceService {
             });
         }
 
+        let dismissed = self.dismissed_nudges.read().await;
+        if !dismissed.is_empty() {
+            nudges.retain(|n| !dismissed.contains(&n.id));
+        }
+
         Ok(nudges)
+    }
+
+    pub async fn dismiss_companion_nudge(&self, id: Uuid) {
+        self.dismissed_nudges.write().await.insert(id);
     }
 
     pub async fn list_companion_phrases(

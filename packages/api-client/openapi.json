@@ -750,6 +750,36 @@
         }
       }
     },
+    "/api/companion/nudges/{id}/dismiss": {
+      "post": {
+        "tags": [
+          "companion"
+        ],
+        "operationId": "dismissCompanionNudge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Nudge UUID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dismissed companion nudge",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/companion/phrases": {
       "get": {
         "tags": [
@@ -833,6 +863,24 @@
         "responses": {
           "200": {
             "description": "Soft-deleted companion phrase",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/companion/state": {
+      "get": {
+        "tags": [
+          "companion"
+        ],
+        "operationId": "getCompanionState",
+        "responses": {
+          "200": {
+            "description": "Frieren companion mood and active nudges",
             "content": {
               "application/json": {
                 "schema": {}
@@ -1271,6 +1319,56 @@
           "courses"
         ],
         "operationId": "listYoutubePlaylists",
+        "responses": {
+          "200": {
+            "description": "Playlists discovered from read-only youtube-lists.sqlite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/YoutubePlaylistsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/courses/youtube/import": {
+      "post": {
+        "tags": [
+          "courses"
+        ],
+        "operationId": "importYoutubePlaylistNested",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportYoutubePlaylistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Imported YouTube playlist as course",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CourseSyllabusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/courses/youtube/playlists": {
+      "get": {
+        "tags": [
+          "courses"
+        ],
+        "operationId": "listYoutubePlaylistsNested",
         "responses": {
           "200": {
             "description": "Playlists discovered from read-only youtube-lists.sqlite",
@@ -2373,11 +2471,11 @@
         "operationId": "getRetirementConfig",
         "responses": {
           "200": {
-            "description": "Singleton FIRE retirement configuration",
+            "description": "Singleton FIRE retirement projection and configuration",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RetirementConfig"
+                  "$ref": "#/components/schemas/FireProjectionResponse"
                 }
               }
             }
@@ -3099,6 +3197,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hermes/chat": {
+      "post": {
+        "tags": [
+          "hermes"
+        ],
+        "operationId": "hermesChat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatStreamRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of HermesStreamEvent frames",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HermesStreamEvent"
                 }
               }
             }
@@ -3854,6 +3982,74 @@
         "responses": {
           "200": {
             "description": "Weekly Review summary and Markdown export",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeeklyReviewSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reviews/{week_key}": {
+      "get": {
+        "tags": [
+          "routines"
+        ],
+        "operationId": "getWeeklyReviewByKey",
+        "parameters": [
+          {
+            "name": "week_key",
+            "in": "path",
+            "description": "ISO week (YYYY-Www) or date",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Weekly Review summary and saved reflections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeeklyReviewSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "routines"
+        ],
+        "operationId": "upsertWeeklyReviewByKey",
+        "parameters": [
+          {
+            "name": "week_key",
+            "in": "path",
+            "description": "ISO week (YYYY-Www) or date",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted Weekly Review and exported Vault Markdown note",
             "content": {
               "application/json": {
                 "schema": {
@@ -5089,6 +5285,26 @@
         }
       }
     },
+    "/api/time-sessions/active": {
+      "get": {
+        "tags": [
+          "todos"
+        ],
+        "operationId": "getActiveTimeSession",
+        "responses": {
+          "200": {
+            "description": "Active focus timer state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveTimerResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/time/sessions": {
       "get": {
         "tags": [
@@ -5401,6 +5617,85 @@
                     "$ref": "#/components/schemas/VaultNoteSummary"
                   }
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/reindex": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "reindexVault",
+        "responses": {
+          "200": {
+            "description": "Re-indexed Second Brain Markdown notes",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/search": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "searchVaultNotes",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "semantic",
+            "in": "query",
+            "description": "Enable pgvector semantic search",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching Second Brain notes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VaultNoteSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/tree": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "getVaultTree",
+        "responses": {
+          "200": {
+            "description": "Second Brain Markdown directory tree and notes",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }

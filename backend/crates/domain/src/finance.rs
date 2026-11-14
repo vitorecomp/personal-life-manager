@@ -264,7 +264,7 @@ pub struct UpsertMonthlyInvestmentPlanRequest {
     #[serde(default)]
     pub currency: CurrencyCode,
     pub fx_usd_brl: Option<Decimal>,
-    #[serde(default, alias = "net_salary_cents")]
+    #[serde(default, alias = "net_salary_cents", alias = "planned_income_cents", alias = "income_cents")]
     pub salary_income_cents: i64,
     #[serde(default)]
     pub other_income_cents: i64,
@@ -272,9 +272,9 @@ pub struct UpsertMonthlyInvestmentPlanRequest {
     pub planned_spend_cents: i64,
     #[serde(default, alias = "actual_living_spend_cents")]
     pub actual_spend_cents: Option<i64>,
-    #[serde(default)]
+    #[serde(default, alias = "planned_invest_cents", alias = "target_invest_cents")]
     pub planned_investment_cents: i64,
-    #[serde(default, alias = "actual_investment_cents")]
+    #[serde(default, alias = "actual_investment_cents", alias = "actual_invest_cents", alias = "invested_cents")]
     pub actual_invested_cents: i64,
     #[serde(default)]
     pub allocations_json: serde_json::Value,

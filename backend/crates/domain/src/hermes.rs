@@ -215,7 +215,7 @@ pub struct CreateHermesSessionRequest {
     pub high_level_mode: bool,
     #[serde(default)]
     pub folder_name: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "page_context", alias = "route_context")]
     pub last_route_context: Option<serde_json::Value>,
     #[serde(default, alias = "initial_messages")]
     pub messages_json: Option<serde_json::Value>,
@@ -228,6 +228,7 @@ pub struct UpdateHermesSessionRequest {
     pub archived: Option<bool>,
     pub folder_name: Option<String>,
     pub high_level_mode: Option<bool>,
+    #[serde(alias = "page_context", alias = "route_context")]
     pub last_route_context: Option<serde_json::Value>,
     pub profile_slug: Option<String>,
     pub model: Option<String>,

@@ -19,6 +19,7 @@ use hermes_domain::id::new_uuid_v7;
 use hermes_domain::todos::{CreateTaskRequest, Task, TaskEnergyLevel, TaskStatus};
 use rusqlite::{Connection, OpenFlags};
 use rust_decimal::Decimal;
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::service::LifeOpsService;
@@ -1093,6 +1094,43 @@ impl LifeOpsService {
             course_id,
             prompt_context,
         })
+    }
+
+    pub async fn list_course_quizzes(
+        &self,
+        course_id: Uuid,
+    ) -> Result<Vec<CourseQuizResponse>, ApiError> {
+        let _ = self.fetch_course_row(course_id).await?;
+        let rows = sqlx::query(
+            r#"
+            SELECT session_key, messages_json
+            FROM hermes_sessions_index
+            WHERE last_route_context->>'course_id' = $1
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(course_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut quizzes = Vec::with_capacity(rows.len());
+        for row in rows {
+            let session_key: String = row.try_get("session_key")?;
+            let messages_json: serde_json::Value = row.try_get("messages_json")?;
+            let prompt_context = messages_json
+                .as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or_default()
+                .to_string();
+            quizzes.push(CourseQuizResponse {
+                session_key,
+                course_id,
+                prompt_context,
+            });
+        }
+        Ok(quizzes)
     }
 
     pub async fn spawn_course_todo(

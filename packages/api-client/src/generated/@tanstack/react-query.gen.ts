@@ -3,8 +3,8 @@
 import { type DefaultError, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { approveMcpAction, bulkUpdateTasks, callMcpToolRest, checkAllServers, checkServer, cloneDashboard, completeLessonReview, completeTask, createAgent, createAgentTrigger, createCompanionPhrase, createCourse, createCourseLesson, createCourseModule, createCourseQuiz, createDashboard, createDashboardWidget, createFinanceAsset, createGoal, createGoalCheckin, createHermesSession, createKeyResult, createPairingQr, createPatToken, createPortfolioSnapshot, createProject, createRoutine, createRoutineItem, createServer, createTask, createTimeSession, deleteAgent, deleteAgentTrigger, deleteCompanionPhrase, deleteCourse, deleteCourseLesson, deleteCourseModule, deleteDashboard, deleteDashboardWidget, deleteFinanceAsset, deleteGoal, deleteHermesSession, deleteKeyResult, deleteProject, deleteRoutine, deleteRoutineItem, deleteServer, deleteTask, deleteTimeSession, discardTimer, dispatchAgent, distillToVault, forkHermesSession, getActiveTimer, getAgent, getAgentQueue, getAgentRun, getCompanionNudges, getCourse, getDailyCheckin, getDashboard, getFinanceAsset, getFinanceAssetCandles, getGoal, getGoalBlueprint, getGoalsPaceDrift, getHealth, getHermesGatewayHealth, getHermesSession, getIdealWeek, getLifeScore, getMe, getMonthlyPlan, getOpenapiSpec, getPortfolioAllocation, getProject, getRetirementConfig, getRetirementProjection, getReviewsWeekly, getRoutine, getRoutinesAnalytics, getRoutinesIdealWeek, getServer, getServersSummary, getTask, getTaskFlowGraph, getTimeStats, getTodayCapacity, getVaultNote, getWeeklyReviewSummary, getYearlyCycle, importCourseOutline, importYoutubePlaylist, listAgentRuns, listAgents, listAgentTriggers, listCompanionPhrases, listCourses, listDashboards, listDueCourseReviews, listDueSpacedReviews, listFinanceAssets, listGoalCheckins, listGoals, listHermesSessions, listMcpApprovals, listMcpTools, listMcpUndoActions, listMonthlyPlans, listPatTokens, listPortfolioSnapshots, listProjects, listRoutines, listRunsForAgent, listServers, listTasks, listTimeSessions, listVaultNotes, listYearlyCycles, listYoutubePlaylists, login, logout, logRoutineItem, type Options, parseQuickCaptureTask, patchCourseLessonStatus, patchTaskStatus, refreshFinanceQuotes, refreshWidget, rejectMcpAction, reorderDashboards, replaceIdealWeek, revokePatToken, setDayProfile, simulateRetirement, spawnCourseTodo, startTimer, stopTimer, streamHermesChat, streamSystemEvents, syncPull, syncPush, syncYoutubeCourse, undoMcpAction, updateAgent, updateAgentTrigger, updateCourse, updateCourseLesson, updateCourseModule, updateDashboard, updateDashboardWidget, updateFinanceAsset, updateGoal, updateGoalBlueprintPos, updateHermesSession, updateKeyResult, updateProject, updateRetirementConfig, updateRoutine, updateRoutineItem, updateServer, updateTask, upsertDailyCheckin, upsertMonthlyPlan, upsertYearlyCycle, verifyAuth } from '../sdk.gen';
-import type { ApproveMcpActionData, BulkUpdateTasksData, CallMcpToolRestData, CheckAllServersData, CheckAllServersResponse, CheckServerData, CheckServerResponse, CloneDashboardData, CloneDashboardResponse, CompleteLessonReviewData, CompleteLessonReviewResponse, CompleteTaskData, CompleteTaskResponse, CreateAgentData, CreateAgentResponse, CreateAgentTriggerData, CreateAgentTriggerResponse, CreateCompanionPhraseData, CreateCompanionPhraseResponse, CreateCourseData, CreateCourseLessonData, CreateCourseLessonResponse, CreateCourseModuleData, CreateCourseModuleResponse, CreateCourseQuizData, CreateCourseQuizResponse, CreateCourseResponse, CreateDashboardData, CreateDashboardResponse, CreateDashboardWidgetData, CreateDashboardWidgetResponse, CreateFinanceAssetData, CreateFinanceAssetResponse, CreateGoalCheckinData, CreateGoalCheckinResponse, CreateGoalData, CreateGoalResponse, CreateHermesSessionData, CreateHermesSessionResponse, CreateKeyResultData, CreateKeyResultResponse, CreatePairingQrData, CreatePairingQrResponse, CreatePatTokenData, CreatePatTokenResponse, CreatePortfolioSnapshotData, CreatePortfolioSnapshotResponse, CreateProjectData, CreateProjectResponse, CreateRoutineData, CreateRoutineItemData, CreateRoutineItemResponse, CreateRoutineResponse, CreateServerData, CreateServerResponse, CreateTaskData, CreateTaskResponse, CreateTimeSessionData, CreateTimeSessionResponse, DeleteAgentData, DeleteAgentTriggerData, DeleteCompanionPhraseData, DeleteCourseData, DeleteCourseLessonData, DeleteCourseModuleData, DeleteDashboardData, DeleteDashboardWidgetData, DeleteFinanceAssetData, DeleteGoalData, DeleteHermesSessionData, DeleteKeyResultData, DeleteProjectData, DeleteRoutineData, DeleteRoutineItemData, DeleteServerData, DeleteTaskData, DeleteTimeSessionData, DiscardTimerData, DiscardTimerResponse, DispatchAgentData, DispatchAgentResponse, DistillToVaultData, DistillToVaultResponse, ForkHermesSessionData, ForkHermesSessionResponse, GetActiveTimerData, GetActiveTimerResponse, GetAgentData, GetAgentQueueData, GetAgentQueueResponse, GetAgentResponse, GetAgentRunData, GetAgentRunResponse, GetCompanionNudgesData, GetCompanionNudgesResponse, GetCourseData, GetCourseResponse, GetDailyCheckinData, GetDailyCheckinResponse, GetDashboardData, GetDashboardError, GetDashboardResponse, GetFinanceAssetCandlesData, GetFinanceAssetCandlesResponse, GetFinanceAssetData, GetFinanceAssetResponse, GetGoalBlueprintData, GetGoalBlueprintResponse, GetGoalData, GetGoalResponse, GetGoalsPaceDriftData, GetGoalsPaceDriftResponse, GetHealthData, GetHealthResponse, GetHermesGatewayHealthData, GetHermesSessionData, GetHermesSessionResponse, GetIdealWeekData, GetIdealWeekResponse, GetLifeScoreData, GetLifeScoreResponse, GetMeData, GetMeResponse, GetMonthlyPlanData, GetMonthlyPlanResponse, GetOpenapiSpecData, GetOpenapiSpecResponse, GetPortfolioAllocationData, GetPortfolioAllocationResponse, GetProjectData, GetProjectResponse, GetRetirementConfigData, GetRetirementConfigResponse, GetRetirementProjectionData, GetRetirementProjectionResponse, GetReviewsWeeklyData, GetReviewsWeeklyResponse, GetRoutineData, GetRoutineResponse, GetRoutinesAnalyticsData, GetRoutinesAnalyticsResponse, GetRoutinesIdealWeekData, GetRoutinesIdealWeekResponse, GetServerData, GetServerResponse, GetServersSummaryData, GetServersSummaryResponse, GetTaskData, GetTaskFlowGraphData, GetTaskFlowGraphResponse, GetTaskResponse, GetTimeStatsData, GetTimeStatsResponse, GetTodayCapacityData, GetTodayCapacityResponse, GetVaultNoteData, GetVaultNoteResponse, GetWeeklyReviewSummaryData, GetWeeklyReviewSummaryResponse, GetYearlyCycleData, GetYearlyCycleResponse, ImportCourseOutlineData, ImportCourseOutlineResponse, ImportYoutubePlaylistData, ImportYoutubePlaylistResponse, ListAgentRunsData, ListAgentRunsResponse, ListAgentsData, ListAgentsResponse, ListAgentTriggersData, ListAgentTriggersResponse, ListCompanionPhrasesData, ListCompanionPhrasesResponse, ListCoursesData, ListCoursesResponse, ListDashboardsData, ListDashboardsResponse, ListDueCourseReviewsData, ListDueCourseReviewsResponse, ListDueSpacedReviewsData, ListDueSpacedReviewsResponse, ListFinanceAssetsData, ListFinanceAssetsResponse, ListGoalCheckinsData, ListGoalCheckinsResponse, ListGoalsData, ListGoalsResponse, ListHermesSessionsData, ListHermesSessionsResponse, ListMcpApprovalsData, ListMcpApprovalsResponse, ListMcpToolsData, ListMcpToolsResponse, ListMcpUndoActionsData, ListMcpUndoActionsResponse, ListMonthlyPlansData, ListMonthlyPlansResponse, ListPatTokensData, ListPatTokensResponse, ListPortfolioSnapshotsData, ListPortfolioSnapshotsResponse, ListProjectsData, ListProjectsResponse, ListRoutinesData, ListRoutinesResponse, ListRunsForAgentData, ListRunsForAgentResponse, ListServersData, ListServersResponse, ListTasksData, ListTasksResponse, ListTimeSessionsData, ListTimeSessionsResponse, ListVaultNotesData, ListVaultNotesResponse, ListYearlyCyclesData, ListYearlyCyclesResponse, ListYoutubePlaylistsData, ListYoutubePlaylistsResponse, LoginData, LoginError, LoginResponse2, LogoutData, LogRoutineItemData, LogRoutineItemResponse, ParseQuickCaptureTaskData, ParseQuickCaptureTaskResponse, PatchCourseLessonStatusData, PatchCourseLessonStatusResponse, PatchTaskStatusData, PatchTaskStatusResponse, RefreshFinanceQuotesData, RefreshFinanceQuotesResponse, RefreshWidgetData, RefreshWidgetResponse, RejectMcpActionData, RejectMcpActionResponse, ReorderDashboardsData, ReorderDashboardsResponse, ReplaceIdealWeekData, ReplaceIdealWeekResponse, RevokePatTokenData, RevokePatTokenError, RevokePatTokenResponse, SetDayProfileData, SetDayProfileResponse, SimulateRetirementData, SimulateRetirementResponse, SpawnCourseTodoData, SpawnCourseTodoResponse, StartTimerData, StartTimerResponse, StopTimerData, StopTimerResponse, StreamHermesChatData, StreamHermesChatResponse, StreamSystemEventsData, StreamSystemEventsResponse, SyncPullData, SyncPullError, SyncPullResponse2, SyncPushData, SyncPushError, SyncPushResponse2, SyncYoutubeCourseData, SyncYoutubeCourseResponse, UndoMcpActionData, UpdateAgentData, UpdateAgentResponse, UpdateAgentTriggerData, UpdateAgentTriggerResponse, UpdateCourseData, UpdateCourseLessonData, UpdateCourseLessonResponse, UpdateCourseModuleData, UpdateCourseModuleResponse, UpdateCourseResponse, UpdateDashboardData, UpdateDashboardResponse, UpdateDashboardWidgetData, UpdateDashboardWidgetResponse, UpdateFinanceAssetData, UpdateFinanceAssetResponse, UpdateGoalBlueprintPosData, UpdateGoalBlueprintPosResponse, UpdateGoalData, UpdateGoalResponse, UpdateHermesSessionData, UpdateHermesSessionResponse, UpdateKeyResultData, UpdateKeyResultResponse, UpdateProjectData, UpdateProjectResponse, UpdateRetirementConfigData, UpdateRetirementConfigResponse, UpdateRoutineData, UpdateRoutineItemData, UpdateRoutineItemResponse, UpdateRoutineResponse, UpdateServerData, UpdateServerResponse, UpdateTaskData, UpdateTaskResponse, UpsertDailyCheckinData, UpsertDailyCheckinResponse, UpsertMonthlyPlanData, UpsertMonthlyPlanResponse, UpsertYearlyCycleData, UpsertYearlyCycleResponse, VerifyAuthData, VerifyAuthError, VerifyAuthResponse } from '../types.gen';
+import { approveMcpAction, bulkUpdateTasks, callMcpToolRest, checkAllServers, checkServer, cloneDashboard, completeLessonReview, completeTask, createAgent, createAgentTrigger, createCompanionPhrase, createCourse, createCourseLesson, createCourseModule, createCourseQuiz, createDashboard, createDashboardWidget, createFinanceAsset, createGoal, createGoalCheckin, createHermesSession, createKeyResult, createPairingQr, createPatToken, createPortfolioSnapshot, createProject, createRoutine, createRoutineItem, createServer, createTask, createTimeSession, deleteAgent, deleteAgentTrigger, deleteCompanionPhrase, deleteCourse, deleteCourseLesson, deleteCourseModule, deleteDashboard, deleteDashboardWidget, deleteFinanceAsset, deleteGoal, deleteHermesSession, deleteKeyResult, deleteProject, deleteRoutine, deleteRoutineItem, deleteServer, deleteTask, deleteTimeSession, discardTimer, dismissCompanionNudge, dispatchAgent, distillToVault, forkHermesSession, getActiveTimer, getActiveTimeSession, getAgent, getAgentQueue, getAgentRun, getCompanionNudges, getCompanionState, getCourse, getDailyCheckin, getDashboard, getFinanceAsset, getFinanceAssetCandles, getGoal, getGoalBlueprint, getGoalsPaceDrift, getHealth, getHermesGatewayHealth, getHermesSession, getIdealWeek, getLifeScore, getMe, getMonthlyPlan, getOpenapiSpec, getPortfolioAllocation, getProject, getRetirementConfig, getRetirementProjection, getReviewsWeekly, getRoutine, getRoutinesAnalytics, getRoutinesIdealWeek, getServer, getServersSummary, getTask, getTaskFlowGraph, getTimeStats, getTodayCapacity, getVaultNote, getVaultTree, getWeeklyReviewByKey, getWeeklyReviewSummary, getYearlyCycle, hermesChat, importCourseOutline, importYoutubePlaylist, importYoutubePlaylistNested, listAgentRuns, listAgents, listAgentTriggers, listCompanionPhrases, listCourses, listDashboards, listDueCourseReviews, listDueSpacedReviews, listFinanceAssets, listGoalCheckins, listGoals, listHermesSessions, listMcpApprovals, listMcpTools, listMcpUndoActions, listMonthlyPlans, listPatTokens, listPortfolioSnapshots, listProjects, listRoutines, listRunsForAgent, listServers, listTasks, listTimeSessions, listVaultNotes, listYearlyCycles, listYoutubePlaylists, listYoutubePlaylistsNested, login, logout, logRoutineItem, type Options, parseQuickCaptureTask, patchCourseLessonStatus, patchTaskStatus, refreshFinanceQuotes, refreshWidget, reindexVault, rejectMcpAction, reorderDashboards, replaceIdealWeek, revokePatToken, searchVaultNotes, setDayProfile, simulateRetirement, spawnCourseTodo, startTimer, stopTimer, streamHermesChat, streamSystemEvents, syncPull, syncPush, syncYoutubeCourse, undoMcpAction, updateAgent, updateAgentTrigger, updateCourse, updateCourseLesson, updateCourseModule, updateDashboard, updateDashboardWidget, updateFinanceAsset, updateGoal, updateGoalBlueprintPos, updateHermesSession, updateKeyResult, updateProject, updateRetirementConfig, updateRoutine, updateRoutineItem, updateServer, updateTask, upsertDailyCheckin, upsertMonthlyPlan, upsertWeeklyReviewByKey, upsertYearlyCycle, verifyAuth } from '../sdk.gen';
+import type { ApproveMcpActionData, BulkUpdateTasksData, CallMcpToolRestData, CheckAllServersData, CheckAllServersResponse, CheckServerData, CheckServerResponse, CloneDashboardData, CloneDashboardResponse, CompleteLessonReviewData, CompleteLessonReviewResponse, CompleteTaskData, CompleteTaskResponse, CreateAgentData, CreateAgentResponse, CreateAgentTriggerData, CreateAgentTriggerResponse, CreateCompanionPhraseData, CreateCompanionPhraseResponse, CreateCourseData, CreateCourseLessonData, CreateCourseLessonResponse, CreateCourseModuleData, CreateCourseModuleResponse, CreateCourseQuizData, CreateCourseQuizResponse, CreateCourseResponse, CreateDashboardData, CreateDashboardResponse, CreateDashboardWidgetData, CreateDashboardWidgetResponse, CreateFinanceAssetData, CreateFinanceAssetResponse, CreateGoalCheckinData, CreateGoalCheckinResponse, CreateGoalData, CreateGoalResponse, CreateHermesSessionData, CreateHermesSessionResponse, CreateKeyResultData, CreateKeyResultResponse, CreatePairingQrData, CreatePairingQrResponse, CreatePatTokenData, CreatePatTokenResponse, CreatePortfolioSnapshotData, CreatePortfolioSnapshotResponse, CreateProjectData, CreateProjectResponse, CreateRoutineData, CreateRoutineItemData, CreateRoutineItemResponse, CreateRoutineResponse, CreateServerData, CreateServerResponse, CreateTaskData, CreateTaskResponse, CreateTimeSessionData, CreateTimeSessionResponse, DeleteAgentData, DeleteAgentTriggerData, DeleteCompanionPhraseData, DeleteCourseData, DeleteCourseLessonData, DeleteCourseModuleData, DeleteDashboardData, DeleteDashboardWidgetData, DeleteFinanceAssetData, DeleteGoalData, DeleteHermesSessionData, DeleteKeyResultData, DeleteProjectData, DeleteRoutineData, DeleteRoutineItemData, DeleteServerData, DeleteTaskData, DeleteTimeSessionData, DiscardTimerData, DiscardTimerResponse, DismissCompanionNudgeData, DispatchAgentData, DispatchAgentResponse, DistillToVaultData, DistillToVaultResponse, ForkHermesSessionData, ForkHermesSessionResponse, GetActiveTimerData, GetActiveTimerResponse, GetActiveTimeSessionData, GetActiveTimeSessionResponse, GetAgentData, GetAgentQueueData, GetAgentQueueResponse, GetAgentResponse, GetAgentRunData, GetAgentRunResponse, GetCompanionNudgesData, GetCompanionNudgesResponse, GetCompanionStateData, GetCourseData, GetCourseResponse, GetDailyCheckinData, GetDailyCheckinResponse, GetDashboardData, GetDashboardError, GetDashboardResponse, GetFinanceAssetCandlesData, GetFinanceAssetCandlesResponse, GetFinanceAssetData, GetFinanceAssetResponse, GetGoalBlueprintData, GetGoalBlueprintResponse, GetGoalData, GetGoalResponse, GetGoalsPaceDriftData, GetGoalsPaceDriftResponse, GetHealthData, GetHealthResponse, GetHermesGatewayHealthData, GetHermesSessionData, GetHermesSessionResponse, GetIdealWeekData, GetIdealWeekResponse, GetLifeScoreData, GetLifeScoreResponse, GetMeData, GetMeResponse, GetMonthlyPlanData, GetMonthlyPlanResponse, GetOpenapiSpecData, GetOpenapiSpecResponse, GetPortfolioAllocationData, GetPortfolioAllocationResponse, GetProjectData, GetProjectResponse, GetRetirementConfigData, GetRetirementConfigResponse, GetRetirementProjectionData, GetRetirementProjectionResponse, GetReviewsWeeklyData, GetReviewsWeeklyResponse, GetRoutineData, GetRoutineResponse, GetRoutinesAnalyticsData, GetRoutinesAnalyticsResponse, GetRoutinesIdealWeekData, GetRoutinesIdealWeekResponse, GetServerData, GetServerResponse, GetServersSummaryData, GetServersSummaryResponse, GetTaskData, GetTaskFlowGraphData, GetTaskFlowGraphResponse, GetTaskResponse, GetTimeStatsData, GetTimeStatsResponse, GetTodayCapacityData, GetTodayCapacityResponse, GetVaultNoteData, GetVaultNoteResponse, GetVaultTreeData, GetWeeklyReviewByKeyData, GetWeeklyReviewByKeyResponse, GetWeeklyReviewSummaryData, GetWeeklyReviewSummaryResponse, GetYearlyCycleData, GetYearlyCycleResponse, HermesChatData, HermesChatResponse, ImportCourseOutlineData, ImportCourseOutlineResponse, ImportYoutubePlaylistData, ImportYoutubePlaylistNestedData, ImportYoutubePlaylistNestedResponse, ImportYoutubePlaylistResponse, ListAgentRunsData, ListAgentRunsResponse, ListAgentsData, ListAgentsResponse, ListAgentTriggersData, ListAgentTriggersResponse, ListCompanionPhrasesData, ListCompanionPhrasesResponse, ListCoursesData, ListCoursesResponse, ListDashboardsData, ListDashboardsResponse, ListDueCourseReviewsData, ListDueCourseReviewsResponse, ListDueSpacedReviewsData, ListDueSpacedReviewsResponse, ListFinanceAssetsData, ListFinanceAssetsResponse, ListGoalCheckinsData, ListGoalCheckinsResponse, ListGoalsData, ListGoalsResponse, ListHermesSessionsData, ListHermesSessionsResponse, ListMcpApprovalsData, ListMcpApprovalsResponse, ListMcpToolsData, ListMcpToolsResponse, ListMcpUndoActionsData, ListMcpUndoActionsResponse, ListMonthlyPlansData, ListMonthlyPlansResponse, ListPatTokensData, ListPatTokensResponse, ListPortfolioSnapshotsData, ListPortfolioSnapshotsResponse, ListProjectsData, ListProjectsResponse, ListRoutinesData, ListRoutinesResponse, ListRunsForAgentData, ListRunsForAgentResponse, ListServersData, ListServersResponse, ListTasksData, ListTasksResponse, ListTimeSessionsData, ListTimeSessionsResponse, ListVaultNotesData, ListVaultNotesResponse, ListYearlyCyclesData, ListYearlyCyclesResponse, ListYoutubePlaylistsData, ListYoutubePlaylistsNestedData, ListYoutubePlaylistsNestedResponse, ListYoutubePlaylistsResponse, LoginData, LoginError, LoginResponse2, LogoutData, LogRoutineItemData, LogRoutineItemResponse, ParseQuickCaptureTaskData, ParseQuickCaptureTaskResponse, PatchCourseLessonStatusData, PatchCourseLessonStatusResponse, PatchTaskStatusData, PatchTaskStatusResponse, RefreshFinanceQuotesData, RefreshFinanceQuotesResponse, RefreshWidgetData, RefreshWidgetResponse, ReindexVaultData, RejectMcpActionData, RejectMcpActionResponse, ReorderDashboardsData, ReorderDashboardsResponse, ReplaceIdealWeekData, ReplaceIdealWeekResponse, RevokePatTokenData, RevokePatTokenError, RevokePatTokenResponse, SearchVaultNotesData, SearchVaultNotesResponse, SetDayProfileData, SetDayProfileResponse, SimulateRetirementData, SimulateRetirementResponse, SpawnCourseTodoData, SpawnCourseTodoResponse, StartTimerData, StartTimerResponse, StopTimerData, StopTimerResponse, StreamHermesChatData, StreamHermesChatResponse, StreamSystemEventsData, StreamSystemEventsResponse, SyncPullData, SyncPullError, SyncPullResponse2, SyncPushData, SyncPushError, SyncPushResponse2, SyncYoutubeCourseData, SyncYoutubeCourseResponse, UndoMcpActionData, UpdateAgentData, UpdateAgentResponse, UpdateAgentTriggerData, UpdateAgentTriggerResponse, UpdateCourseData, UpdateCourseLessonData, UpdateCourseLessonResponse, UpdateCourseModuleData, UpdateCourseModuleResponse, UpdateCourseResponse, UpdateDashboardData, UpdateDashboardResponse, UpdateDashboardWidgetData, UpdateDashboardWidgetResponse, UpdateFinanceAssetData, UpdateFinanceAssetResponse, UpdateGoalBlueprintPosData, UpdateGoalBlueprintPosResponse, UpdateGoalData, UpdateGoalResponse, UpdateHermesSessionData, UpdateHermesSessionResponse, UpdateKeyResultData, UpdateKeyResultResponse, UpdateProjectData, UpdateProjectResponse, UpdateRetirementConfigData, UpdateRetirementConfigResponse, UpdateRoutineData, UpdateRoutineItemData, UpdateRoutineItemResponse, UpdateRoutineResponse, UpdateServerData, UpdateServerResponse, UpdateTaskData, UpdateTaskResponse, UpsertDailyCheckinData, UpsertDailyCheckinResponse, UpsertMonthlyPlanData, UpsertMonthlyPlanResponse, UpsertWeeklyReviewByKeyData, UpsertWeeklyReviewByKeyResponse, UpsertYearlyCycleData, UpsertYearlyCycleResponse, VerifyAuthData, VerifyAuthError, VerifyAuthResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -372,6 +372,20 @@ export const getCompanionNudgesOptions = (options?: Options<GetCompanionNudgesDa
     queryKey: getCompanionNudgesQueryKey(options)
 });
 
+export const dismissCompanionNudgeMutation = (options?: Partial<Options<DismissCompanionNudgeData>>): UseMutationOptions<unknown, DefaultError, Options<DismissCompanionNudgeData>> => {
+    const mutationOptions: UseMutationOptions<unknown, DefaultError, Options<DismissCompanionNudgeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dismissCompanionNudge({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const listCompanionPhrasesQueryKey = (options?: Options<ListCompanionPhrasesData>) => createQueryKey('listCompanionPhrases', options);
 
 export const listCompanionPhrasesOptions = (options?: Options<ListCompanionPhrasesData>) => queryOptions<ListCompanionPhrasesResponse, DefaultError, ListCompanionPhrasesResponse, ReturnType<typeof listCompanionPhrasesQueryKey>>({
@@ -414,6 +428,21 @@ export const deleteCompanionPhraseMutation = (options?: Partial<Options<DeleteCo
     };
     return mutationOptions;
 };
+
+export const getCompanionStateQueryKey = (options?: Options<GetCompanionStateData>) => createQueryKey('getCompanionState', options);
+
+export const getCompanionStateOptions = (options?: Options<GetCompanionStateData>) => queryOptions<unknown, DefaultError, unknown, ReturnType<typeof getCompanionStateQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getCompanionState({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getCompanionStateQueryKey(options)
+});
 
 export const listCoursesQueryKey = (options?: Options<ListCoursesData>) => createQueryKey('listCourses', options);
 
@@ -599,6 +628,35 @@ export const listYoutubePlaylistsOptions = (options?: Options<ListYoutubePlaylis
         return data;
     },
     queryKey: listYoutubePlaylistsQueryKey(options)
+});
+
+export const importYoutubePlaylistNestedMutation = (options?: Partial<Options<ImportYoutubePlaylistNestedData>>): UseMutationOptions<ImportYoutubePlaylistNestedResponse, DefaultError, Options<ImportYoutubePlaylistNestedData>> => {
+    const mutationOptions: UseMutationOptions<ImportYoutubePlaylistNestedResponse, DefaultError, Options<ImportYoutubePlaylistNestedData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await importYoutubePlaylistNested({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const listYoutubePlaylistsNestedQueryKey = (options?: Options<ListYoutubePlaylistsNestedData>) => createQueryKey('listYoutubePlaylistsNested', options);
+
+export const listYoutubePlaylistsNestedOptions = (options?: Options<ListYoutubePlaylistsNestedData>) => queryOptions<ListYoutubePlaylistsNestedResponse, DefaultError, ListYoutubePlaylistsNestedResponse, ReturnType<typeof listYoutubePlaylistsNestedQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await listYoutubePlaylistsNested({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: listYoutubePlaylistsNestedQueryKey(options)
 });
 
 export const deleteCourseMutation = (options?: Partial<Options<DeleteCourseData>>): UseMutationOptions<unknown, DefaultError, Options<DeleteCourseData>> => {
@@ -1364,6 +1422,20 @@ export const getHealthOptions = (options?: Options<GetHealthData>) => queryOptio
     queryKey: getHealthQueryKey(options)
 });
 
+export const hermesChatMutation = (options?: Partial<Options<HermesChatData>>): UseMutationOptions<HermesChatResponse, DefaultError, Options<HermesChatData>> => {
+    const mutationOptions: UseMutationOptions<HermesChatResponse, DefaultError, Options<HermesChatData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await hermesChat({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const streamHermesChatMutation = (options?: Partial<Options<StreamHermesChatData>>): UseMutationOptions<StreamHermesChatResponse, DefaultError, Options<StreamHermesChatData>> => {
     const mutationOptions: UseMutationOptions<StreamHermesChatResponse, DefaultError, Options<StreamHermesChatData>> = {
         mutationFn: async (fnOptions) => {
@@ -1710,6 +1782,35 @@ export const getReviewsWeeklyOptions = (options?: Options<GetReviewsWeeklyData>)
     },
     queryKey: getReviewsWeeklyQueryKey(options)
 });
+
+export const getWeeklyReviewByKeyQueryKey = (options: Options<GetWeeklyReviewByKeyData>) => createQueryKey('getWeeklyReviewByKey', options);
+
+export const getWeeklyReviewByKeyOptions = (options: Options<GetWeeklyReviewByKeyData>) => queryOptions<GetWeeklyReviewByKeyResponse, DefaultError, GetWeeklyReviewByKeyResponse, ReturnType<typeof getWeeklyReviewByKeyQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getWeeklyReviewByKey({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getWeeklyReviewByKeyQueryKey(options)
+});
+
+export const upsertWeeklyReviewByKeyMutation = (options?: Partial<Options<UpsertWeeklyReviewByKeyData>>): UseMutationOptions<UpsertWeeklyReviewByKeyResponse, DefaultError, Options<UpsertWeeklyReviewByKeyData>> => {
+    const mutationOptions: UseMutationOptions<UpsertWeeklyReviewByKeyResponse, DefaultError, Options<UpsertWeeklyReviewByKeyData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await upsertWeeklyReviewByKey({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
 
 export const listRoutinesQueryKey = (options?: Options<ListRoutinesData>) => createQueryKey('listRoutines', options);
 
@@ -2229,6 +2330,21 @@ export const getLifeScoreOptions = (options?: Options<GetLifeScoreData>) => quer
     queryKey: getLifeScoreQueryKey(options)
 });
 
+export const getActiveTimeSessionQueryKey = (options?: Options<GetActiveTimeSessionData>) => createQueryKey('getActiveTimeSession', options);
+
+export const getActiveTimeSessionOptions = (options?: Options<GetActiveTimeSessionData>) => queryOptions<GetActiveTimeSessionResponse, DefaultError, GetActiveTimeSessionResponse, ReturnType<typeof getActiveTimeSessionQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getActiveTimeSession({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getActiveTimeSessionQueryKey(options)
+});
+
 export const listTimeSessionsQueryKey = (options?: Options<ListTimeSessionsData>) => createQueryKey('listTimeSessions', options);
 
 export const listTimeSessionsOptions = (options?: Options<ListTimeSessionsData>) => queryOptions<ListTimeSessionsResponse, DefaultError, ListTimeSessionsResponse, ReturnType<typeof listTimeSessionsQueryKey>>({
@@ -2386,6 +2502,50 @@ export const listVaultNotesOptions = (options?: Options<ListVaultNotesData>) => 
         return data;
     },
     queryKey: listVaultNotesQueryKey(options)
+});
+
+export const reindexVaultMutation = (options?: Partial<Options<ReindexVaultData>>): UseMutationOptions<unknown, DefaultError, Options<ReindexVaultData>> => {
+    const mutationOptions: UseMutationOptions<unknown, DefaultError, Options<ReindexVaultData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await reindexVault({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const searchVaultNotesQueryKey = (options?: Options<SearchVaultNotesData>) => createQueryKey('searchVaultNotes', options);
+
+export const searchVaultNotesOptions = (options?: Options<SearchVaultNotesData>) => queryOptions<SearchVaultNotesResponse, DefaultError, SearchVaultNotesResponse, ReturnType<typeof searchVaultNotesQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await searchVaultNotes({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: searchVaultNotesQueryKey(options)
+});
+
+export const getVaultTreeQueryKey = (options?: Options<GetVaultTreeData>) => createQueryKey('getVaultTree', options);
+
+export const getVaultTreeOptions = (options?: Options<GetVaultTreeData>) => queryOptions<unknown, DefaultError, unknown, ReturnType<typeof getVaultTreeQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getVaultTree({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getVaultTreeQueryKey(options)
 });
 
 export const getWeeklyReviewSummaryQueryKey = (options?: Options<GetWeeklyReviewSummaryData>) => createQueryKey('getWeeklyReviewSummary', options);

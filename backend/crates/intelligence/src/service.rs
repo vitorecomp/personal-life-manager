@@ -1,12 +1,13 @@
 //! Unified `IntelligenceService` facade combining `LifeOpsService`, `PgPool`,
 //! `hermes gateway` configuration, `second_brain_dir`, and `SystemEvent` broadcast bus.
 
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
 
 use hermes_domain::events::SystemEvent;
 use hermes_life_ops::{LifeOpsService, test_support::TestDb};
 use sqlx::PgPool;
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
+use uuid::Uuid;
 
 use crate::DEFAULT_HERMES_GATEWAY_URL;
 
@@ -19,6 +20,7 @@ pub struct IntelligenceService {
     pub second_brain_dir: PathBuf,
     pub events_tx: broadcast::Sender<SystemEvent>,
     pub http_client: reqwest::Client,
+    pub dismissed_nudges: Arc<RwLock<HashSet<Uuid>>>,
 }
 
 impl IntelligenceService {
@@ -58,6 +60,7 @@ impl IntelligenceService {
             second_brain_dir,
             events_tx,
             http_client,
+            dismissed_nudges: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 

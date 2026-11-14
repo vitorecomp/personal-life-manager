@@ -587,6 +587,18 @@ pub async fn doc_fork_hermes_session() {}
 )]
 pub async fn doc_stream_hermes_chat() {}
 
+#[utoipa::path(
+    post,
+    path = "/api/hermes/chat",
+    operation_id = "hermesChat",
+    tag = "hermes",
+    request_body = ChatStreamRequest,
+    responses(
+        (status = 200, description = "SSE stream of HermesStreamEvent frames", body = HermesStreamEvent)
+    )
+)]
+pub async fn doc_hermes_chat() {}
+
 // =============================================================================
 // 5. MCP Autonomy, Approvals & Undo (F10)
 // =============================================================================
@@ -928,6 +940,54 @@ pub async fn doc_distill_to_vault() {}
 
 #[utoipa::path(
     get,
+    path = "/api/vault/tree",
+    operation_id = "getVaultTree",
+    tag = "vault",
+    responses(
+        (status = 200, description = "Second Brain Markdown directory tree and notes", body = Value)
+    )
+)]
+pub async fn doc_get_vault_tree() {}
+
+#[utoipa::path(
+    get,
+    path = "/api/vault/search",
+    operation_id = "searchVaultNotes",
+    tag = "vault",
+    params(
+        ("q" = Option<String>, Query, description = "Search query"),
+        ("semantic" = Option<bool>, Query, description = "Enable pgvector semantic search")
+    ),
+    responses(
+        (status = 200, description = "Matching Second Brain notes", body = Vec<VaultNoteSummary>)
+    )
+)]
+pub async fn doc_search_vault() {}
+
+#[utoipa::path(
+    post,
+    path = "/api/vault/reindex",
+    operation_id = "reindexVault",
+    tag = "vault",
+    responses(
+        (status = 200, description = "Re-indexed Second Brain Markdown notes", body = Value)
+    )
+)]
+pub async fn doc_reindex_vault() {}
+
+#[utoipa::path(
+    get,
+    path = "/api/companion/state",
+    operation_id = "getCompanionState",
+    tag = "companion",
+    responses(
+        (status = 200, description = "Frieren companion mood and active nudges", body = Value)
+    )
+)]
+pub async fn doc_get_companion_state() {}
+
+#[utoipa::path(
+    get,
     path = "/api/companion/nudges",
     operation_id = "getCompanionNudges",
     tag = "companion",
@@ -936,6 +996,20 @@ pub async fn doc_distill_to_vault() {}
     )
 )]
 pub async fn doc_get_companion_nudges() {}
+
+#[utoipa::path(
+    post,
+    path = "/api/companion/nudges/{id}/dismiss",
+    operation_id = "dismissCompanionNudge",
+    tag = "companion",
+    params(
+        ("id" = Uuid, Path, description = "Nudge UUID")
+    ),
+    responses(
+        (status = 200, description = "Dismissed companion nudge", body = Value)
+    )
+)]
+pub async fn doc_dismiss_companion_nudge() {}
 
 #[utoipa::path(
     get,
@@ -1215,6 +1289,17 @@ pub async fn doc_complete_task() {}
 pub async fn doc_get_active_timer() {}
 
 #[utoipa::path(
+    get,
+    path = "/api/time-sessions/active",
+    operation_id = "getActiveTimeSession",
+    tag = "todos",
+    responses(
+        (status = 200, description = "Active focus timer state", body = ActiveTimerResponse)
+    )
+)]
+pub async fn doc_get_time_sessions_active() {}
+
+#[utoipa::path(
     post,
     path = "/api/time/timer/start",
     operation_id = "startTimer",
@@ -1457,6 +1542,35 @@ pub async fn doc_get_weekly_review() {}
     )
 )]
 pub async fn doc_get_reviews_weekly() {}
+
+#[utoipa::path(
+    get,
+    path = "/api/reviews/{week_key}",
+    operation_id = "getWeeklyReviewByKey",
+    tag = "routines",
+    params(
+        ("week_key" = String, Path, description = "ISO week (YYYY-Www) or date")
+    ),
+    responses(
+        (status = 200, description = "Weekly Review summary and saved reflections", body = WeeklyReviewSummaryResponse)
+    )
+)]
+pub async fn doc_get_review_by_week() {}
+
+#[utoipa::path(
+    put,
+    path = "/api/reviews/{week_key}",
+    operation_id = "upsertWeeklyReviewByKey",
+    tag = "routines",
+    params(
+        ("week_key" = String, Path, description = "ISO week (YYYY-Www) or date")
+    ),
+    request_body = Value,
+    responses(
+        (status = 200, description = "Upserted Weekly Review and exported Vault Markdown note", body = WeeklyReviewSummaryResponse)
+    )
+)]
+pub async fn doc_upsert_review_by_week() {}
 
 #[utoipa::path(
     get,
@@ -1817,6 +1931,17 @@ pub async fn doc_create_course() {}
 pub async fn doc_list_youtube_playlists() {}
 
 #[utoipa::path(
+    get,
+    path = "/api/courses/youtube/playlists",
+    operation_id = "listYoutubePlaylistsNested",
+    tag = "courses",
+    responses(
+        (status = 200, description = "Playlists discovered from read-only youtube-lists.sqlite", body = YoutubePlaylistsResponse)
+    )
+)]
+pub async fn doc_list_youtube_playlists_nested() {}
+
+#[utoipa::path(
     post,
     path = "/api/courses/import-youtube",
     operation_id = "importYoutubePlaylist",
@@ -1827,6 +1952,18 @@ pub async fn doc_list_youtube_playlists() {}
     )
 )]
 pub async fn doc_import_youtube_playlist() {}
+
+#[utoipa::path(
+    post,
+    path = "/api/courses/youtube/import",
+    operation_id = "importYoutubePlaylistNested",
+    tag = "courses",
+    request_body = ImportYoutubePlaylistRequest,
+    responses(
+        (status = 201, description = "Imported YouTube playlist as course", body = CourseSyllabusResponse)
+    )
+)]
+pub async fn doc_import_youtube_playlist_nested() {}
 
 #[utoipa::path(
     get,
@@ -2236,7 +2373,7 @@ pub async fn doc_upsert_monthly_plan() {}
     operation_id = "getRetirementConfig",
     tag = "finance",
     responses(
-        (status = 200, description = "Singleton FIRE retirement configuration", body = RetirementConfig)
+        (status = 200, description = "Singleton FIRE retirement projection and configuration", body = FireProjectionResponse)
     )
 )]
 pub async fn doc_get_retirement_config() {}
@@ -2360,6 +2497,7 @@ pub async fn doc_create_portfolio_snapshot() {}
         doc_delete_hermes_session,
         doc_fork_hermes_session,
         doc_stream_hermes_chat,
+        doc_hermes_chat,
         // 5. MCP Autonomy, Approvals & Undo
         doc_list_mcp_tools,
         doc_call_mcp_tool,
@@ -2386,7 +2524,12 @@ pub async fn doc_create_portfolio_snapshot() {}
         doc_list_vault_notes,
         doc_get_vault_note,
         doc_distill_to_vault,
+        doc_get_vault_tree,
+        doc_search_vault,
+        doc_reindex_vault,
+        doc_get_companion_state,
         doc_get_companion_nudges,
+        doc_dismiss_companion_nudge,
         doc_list_companion_phrases,
         doc_create_companion_phrase,
         doc_delete_companion_phrase,
@@ -2408,6 +2551,7 @@ pub async fn doc_create_portfolio_snapshot() {}
         doc_patch_task_status,
         doc_complete_task,
         doc_get_active_timer,
+        doc_get_time_sessions_active,
         doc_start_timer,
         doc_stop_timer,
         doc_discard_timer,
@@ -2428,6 +2572,8 @@ pub async fn doc_create_portfolio_snapshot() {}
         doc_upsert_daily_checkin,
         doc_get_weekly_review,
         doc_get_reviews_weekly,
+        doc_get_review_by_week,
+        doc_upsert_review_by_week,
         doc_get_routine,
         doc_update_routine,
         doc_delete_routine,
@@ -2455,7 +2601,9 @@ pub async fn doc_create_portfolio_snapshot() {}
         doc_list_courses,
         doc_create_course,
         doc_list_youtube_playlists,
+        doc_list_youtube_playlists_nested,
         doc_import_youtube_playlist,
+        doc_import_youtube_playlist_nested,
         doc_list_due_reviews,
         doc_list_due_course_reviews,
         doc_complete_lesson_review,
@@ -2789,27 +2937,43 @@ mod tests {
             "/api/servers",
             "/api/events/stream",
             "/api/hermes/sessions",
+            "/api/hermes/chat",
             "/api/hermes/chat/stream",
+            "/api/companion/state",
+            "/api/companion/nudges",
+            "/api/companion/nudges/{id}/dismiss",
             "/api/companion/phrases",
             "/api/mcp/approvals",
             "/api/mcp/undo",
             "/api/vault/notes",
+            "/api/vault/tree",
+            "/api/vault/search",
+            "/api/vault/reindex",
             "/api/agents",
             "/api/agent-runs",
             "/api/projects",
             "/api/tasks",
             "/api/time/timer",
+            "/api/time-sessions/active",
             "/api/routines",
+            "/api/routines/ideal-week",
             "/api/ideal-week",
             "/api/weekly-review/summary",
+            "/api/reviews/weekly",
+            "/api/reviews/{week_key}",
             "/api/goals",
             "/api/goals/cycles",
+            "/api/goals/blueprint",
             "/api/courses",
+            "/api/courses/youtube/playlists",
+            "/api/courses/youtube/import",
             "/api/courses/spaced-reviews/due",
+            "/api/courses/reviews/due",
             "/api/finance/assets",
             "/api/finance/allocation",
             "/api/finance/monthly-plans",
             "/api/finance/retirement",
+            "/api/finance/retirement/simulate",
         ];
         for req_path in required_paths {
             assert!(
@@ -2820,8 +2984,9 @@ mod tests {
 
         let sdk_openapi_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/api-client/openapi.json");
+        let existing_disk = std::fs::read_to_string(&sdk_openapi_path).ok();
         if std::env::var("WRITE_OPENAPI_JSON").ok().as_deref() == Some("1")
-            || !sdk_openapi_path.exists()
+            || existing_disk.as_deref() != Some(json_str.as_str())
         {
             std::fs::write(&sdk_openapi_path, &json_str)
                 .expect("Failed to write packages/api-client/openapi.json");

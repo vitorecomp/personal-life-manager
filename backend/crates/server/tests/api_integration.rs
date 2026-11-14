@@ -1181,3 +1181,554 @@ async fn f13_f14_f15_f16_f17_life_ops_domains_and_readonly_crawler_sqlite() {
 
     test_db.teardown().await;
 }
+
+#[tokio::test]
+async fn m2d_reviewer_and_challenger_regressions() {
+    let test_db = TestDb::new().await;
+    let state = AppState::from_test_db(&test_db);
+    let app = build_router(state.clone());
+
+    // -------------------------------------------------------------------------
+    // Part A: m2d_reviewer_2 Findings 1–5
+    // -------------------------------------------------------------------------
+
+    // 1. Vault tree, reindex, and path-based note retrieval
+    let (distill_status, distill_val) = send_json(
+        &app,
+        Method::POST,
+        "/api/vault/distill",
+        None,
+        Some(json!({
+            "title": "M2D Regression Note",
+            "content_md": "# M2D\nVault tree and reindex verification.",
+            "content": "# M2D\nVault tree and reindex verification.",
+            "markdown": "# M2D\nVault tree and reindex verification."
+        })),
+    )
+    .await;
+    assert_eq!(distill_status, StatusCode::CREATED);
+    let note_path = distill_val["vault_note_path"].as_str().unwrap();
+
+    let (tree_status, tree_val) =
+        send_json(&app, Method::GET, "/api/vault/tree", None, None).await;
+    assert_eq!(tree_status, StatusCode::OK);
+    assert!(tree_val["notes"].as_array().unwrap().len() >= 1);
+
+    let (reindex_status, reindex_val) =
+        send_json(&app, Method::POST, "/api/vault/reindex", None, Some(json!({}))).await;
+    assert_eq!(reindex_status, StatusCode::OK);
+    assert_eq!(reindex_val["status"], "ok");
+
+    let encoded_path = note_path.replace('/', "%2F");
+    let (note_by_path_status, note_by_path_val) = send_json(
+        &app,
+        Method::GET,
+        &format!("/api/vault/notes/{encoded_path}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(note_by_path_status, StatusCode::OK);
+    assert!(note_by_path_val["content_md"]
+        .as_str()
+        .unwrap()
+        .contains("Vault tree and reindex verification"));
+
+    // 2. Companion state & nudge dismissal
+    let (comp_state_status, comp_state_val) =
+        send_json(&app, Method::GET, "/api/companion/state", None, None).await;
+    assert_eq!(comp_state_status, StatusCode::OK);
+    assert!(comp_state_val["mood"].as_str().is_some());
+    assert!(comp_state_val["active_nudges"].is_array());
+
+    // Create an overdue task so at least 1 nudge is guaranteed, then dismiss it
+    let (_, overdue_task) = send_json(
+        &app,
+        Method::POST,
+        "/api/tasks",
+        None,
+        Some(json!({
+            "title": "Overdue Nudge Task",
+            "scheduled_date": "2020-01-01"
+        })),
+    )
+    .await;
+    let overdue_task_id = overdue_task["id"].as_str().unwrap();
+
+    let (nudges_status, nudges_val) =
+        send_json(&app, Method::GET, "/api/companion/nudges", None, None).await;
+    assert_eq!(nudges_status, StatusCode::OK);
+    let nudges_arr = nudges_val.as_array().unwrap();
+    assert!(nudges_arr.iter().any(|n| n["id"] == overdue_task_id));
+
+    let (dismiss_status, dismiss_val) = send_json(
+        &app,
+        Method::POST,
+        &format!("/api/companion/nudges/{overdue_task_id}/dismiss"),
+        None,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(dismiss_status, StatusCode::OK);
+    assert_eq!(dismiss_val["dismissed"], true);
+
+    let (_, nudges_after) =
+        send_json(&app, Method::GET, "/api/companion/nudges", None, None).await;
+    assert!(!nudges_after
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["id"] == overdue_task_id));
+
+    // 3. Task perspectives & project flow by ID
+    let (persp_status, persp_val) = send_json(
+        &app,
+        Method::GET,
+        "/api/tasks/perspectives/today",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(persp_status, StatusCode::OK);
+    assert!(persp_val.is_array());
+
+    let (_, proj_val) = send_json(
+        &app,
+        Method::POST,
+        "/api/projects",
+        None,
+        Some(json!({ "name": "Flow Project" })),
+    )
+    .await;
+    let proj_id = proj_val["id"].as_str().unwrap();
+
+    let (proj_flow_status, proj_flow_val) = send_json(
+        &app,
+        Method::GET,
+        &format!("/api/projects/{proj_id}/flow"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(proj_flow_status, StatusCode::OK);
+    assert!(proj_flow_val["nodes"].is_array());
+
+    // 4. Routine logs GET & Weekly Review by week_key (PUT/GET/POST export)
+    let (rlogs_status, rlogs_val) = send_json(
+        &app,
+        Method::GET,
+        "/api/routines/logs?date=2026-11-14",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(rlogs_status, StatusCode::OK);
+    assert!(rlogs_val.is_array());
+
+    let (put_rev_status, put_rev_val) = send_json(
+        &app,
+        Method::PUT,
+        "/api/reviews/2026-W46",
+        None,
+        Some(json!({
+            "wins_md": "Completed 14 deep work blocks",
+            "challenges_md": "Late-night context switching",
+            "adjustments_md": "Enforce 21:30 shutdown ritual"
+        })),
+    )
+    .await;
+    assert_eq!(put_rev_status, StatusCode::OK);
+    assert_eq!(put_rev_val["week_key"], "2026-W46");
+    assert_eq!(put_rev_val["wins_md"], "Completed 14 deep work blocks");
+
+    let (get_rev_status, get_rev_val) =
+        send_json(&app, Method::GET, "/api/reviews/2026-W46", None, None).await;
+    assert_eq!(get_rev_status, StatusCode::OK);
+    assert_eq!(get_rev_val["wins_md"], "Completed 14 deep work blocks");
+
+    let (exp_rev_status, exp_rev_val) = send_json(
+        &app,
+        Method::POST,
+        "/api/reviews/2026-W46/export",
+        None,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(exp_rev_status, StatusCode::OK);
+    assert_eq!(exp_rev_val["vault_export_path"], "Reviews/2026-W46.md");
+
+    // 5. PUT /api/goals/cycles/{year} upserts on non-existent year & supports vision_markdown / anti_goals_markdown
+    let (cycle_status, cycle_val) = send_json(
+        &app,
+        Method::PUT,
+        "/api/goals/cycles/2031",
+        None,
+        Some(json!({
+            "theme": "Year of Autonomous Systems",
+            "vision_md": "Build resilient local-first life infrastructure.",
+            "vision_markdown": "Build resilient local-first life infrastructure.",
+            "anti_goals_md": "No unreviewed recurring subscriptions.",
+            "anti_goals_markdown": "No unreviewed recurring subscriptions.",
+            "focus_cap_limit": 3,
+            "focus_cap": 3
+        })),
+    )
+    .await;
+    assert_eq!(cycle_status, StatusCode::OK);
+    assert_eq!(cycle_val["year"], 2031);
+    assert_eq!(cycle_val["theme"], "Year of Autonomous Systems");
+    assert_eq!(
+        cycle_val["vision_md"],
+        "Build resilient local-first life infrastructure."
+    );
+    assert_eq!(
+        cycle_val["anti_goals_md"],
+        "No unreviewed recurring subscriptions."
+    );
+    assert_eq!(cycle_val["focus_cap_limit"], 3);
+
+    // 6. GET /api/finance/retirement returns FireProjectionResponse & GET /api/finance/allocation accepts investable_surplus_cents
+    let (ret_status, ret_val) =
+        send_json(&app, Method::GET, "/api/finance/retirement", None, None).await;
+    assert_eq!(ret_status, StatusCode::OK);
+    assert!(ret_val["fire_number_cents"].as_i64().is_some());
+    assert!(ret_val["trajectory"].is_array());
+    assert!(ret_val["config"].is_object());
+
+    // Seed an asset so allocation has a non-empty portfolio
+    let _ = send_json(
+        &app,
+        Method::POST,
+        "/api/finance/assets",
+        None,
+        Some(json!({
+            "symbol": "ITUB4",
+            "name": "Itau Unibanco",
+            "asset_class": "br_equity",
+            "currency": "BRL",
+            "quantity": "50",
+            "avg_cost_cents": 3000,
+            "current_price_cents": 3200,
+            "target_weight_pct": "100"
+        })),
+    )
+    .await;
+
+    let (alloc_surplus_status, alloc_surplus_val) = send_json(
+        &app,
+        Method::GET,
+        "/api/finance/allocation?investable_surplus_cents=500000",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(alloc_surplus_status, StatusCode::OK);
+    assert_eq!(alloc_surplus_val["new_contribution_cents"], 500000);
+    assert!(
+        alloc_surplus_val["recommendations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["recommended_buy_cents"].as_i64().unwrap_or(0) > 0)
+    );
+
+    // -------------------------------------------------------------------------
+    // Part B: m2d_challenger_2 11 Multi-Field Alias Deduplication Payloads
+    // -------------------------------------------------------------------------
+
+    // Challenger 1: POST /api/courses/youtube/import with playlist_id + youtube_playlist_id + title_override + course_title + title
+    // (When SQLite DB is absent on disk, returns 404 NotFound rather than 400 duplicate field)
+    let (yt_imp_status, yt_imp_val) = send_json(
+        &app,
+        Method::POST,
+        "/api/courses/youtube/import",
+        None,
+        Some(json!({
+            "playlist_id": "PL123",
+            "youtube_playlist_id": "PL123",
+            "title_override": "Rust",
+            "course_title": "Rust",
+            "title": "Rust"
+        })),
+    )
+    .await;
+    assert_ne!(
+        yt_imp_status,
+        StatusCode::BAD_REQUEST,
+        "Must not fail with 400 duplicate field: {yt_imp_val}"
+    );
+
+    // Challenger 2 & GET /api/courses/{id}/quizzes: POST /api/courses/{id}/import-outline with outline_md + outline
+    let (_, course_created) = send_json(
+        &app,
+        Method::POST,
+        "/api/courses",
+        None,
+        Some(json!({ "title": "Alias Course", "provider": "custom" })),
+    )
+    .await;
+    let cid = course_created["course"]["id"].as_str().unwrap();
+
+    let (outline_status, _) = send_json(
+        &app,
+        Method::POST,
+        &format!("/api/courses/{cid}/import-outline"),
+        None,
+        Some(json!({
+            "outline_md": "# Mod 1\n- Lesson 1 (15m)",
+            "outline": "# Mod 1\n- Lesson 1 (15m)"
+        })),
+    )
+    .await;
+    assert_eq!(outline_status, StatusCode::OK);
+
+    let (quiz_post_status, _) = send_json(
+        &app,
+        Method::POST,
+        &format!("/api/courses/{cid}/quizzes"),
+        None,
+        Some(json!({
+            "questions_json": [{"q": "What is ownership?"}],
+            "questions": [{"q": "What is ownership?"}]
+        })),
+    )
+    .await;
+    assert_eq!(quiz_post_status, StatusCode::CREATED);
+
+    let (quiz_get_status, quiz_get_val) = send_json(
+        &app,
+        Method::GET,
+        &format!("/api/courses/{cid}/quizzes"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(quiz_get_status, StatusCode::OK);
+    assert_eq!(quiz_get_val.as_array().unwrap().len(), 1);
+
+    // Challenger 3: POST /api/finance/assets with all canonical + alias pairs
+    let (ch3_status, _) = send_json(
+        &app,
+        Method::POST,
+        "/api/finance/assets",
+        None,
+        Some(json!({
+            "symbol": "WEGE3",
+            "ticker": "WEGE3",
+            "name": "WEG",
+            "asset_class": "br_equity",
+            "currency": "BRL",
+            "quantity": "10",
+            "avg_cost_cents": 3500,
+            "average_cost_cents": 3500,
+            "current_price_cents": 4000,
+            "last_price_cents": 4000,
+            "target_weight_pct": "10",
+            "target_pct": "10",
+            "alert_low_cents": 3000,
+            "alert_below_cents": 3000,
+            "alert_high_cents": 5000,
+            "alert_above_cents": 5000
+        })),
+    )
+    .await;
+    assert_eq!(ch3_status, StatusCode::CREATED);
+
+    // Challenger 4: PUT /api/finance/sheets/2026-11 with all canonical + alias pairs
+    let (ch4_status, _) = send_json(
+        &app,
+        Method::PUT,
+        "/api/finance/sheets/2026-11",
+        None,
+        Some(json!({
+            "salary_income_cents": 2000000,
+            "net_salary_cents": 2000000,
+            "planned_spend_cents": 1000000,
+            "planned_living_spend_cents": 1000000,
+            "actual_spend_cents": 950000,
+            "actual_living_spend_cents": 950000,
+            "planned_investment_cents": 1000000,
+            "actual_invested_cents": 1050000,
+            "actual_investment_cents": 1050000
+        })),
+    )
+    .await;
+    assert_eq!(ch4_status, StatusCode::OK);
+
+    // Challenger 5: POST /api/finance/retirement/simulate with all canonical + alias pairs
+    let (ch5_status, _) = send_json(
+        &app,
+        Method::POST,
+        "/api/finance/retirement/simulate",
+        None,
+        Some(json!({
+            "monthly_contribution_brl_cents": 800000,
+            "monthly_investment_cents": 800000,
+            "new_contribution_cents": 800000,
+            "monthly_retirement_spend_brl_cents": 1500000,
+            "monthly_spend_cents": 1500000,
+            "expected_real_return_pct": "6.0",
+            "real_return_pct": "6.0",
+            "safe_withdrawal_rate_pct": "4.0",
+            "swr_pct": "4.0"
+        })),
+    )
+    .await;
+    assert_eq!(ch5_status, StatusCode::OK);
+
+    // Challenger 6: POST /api/routines/logs with routine_item_id + item_id and log_date + date
+    let (_, created_routine) = send_json(
+        &app,
+        Method::POST,
+        "/api/routines",
+        None,
+        Some(json!({
+            "name": "Alias Routine",
+            "time_slot": "morning",
+            "day_profile": "all"
+        })),
+    )
+    .await;
+    let routine_id = created_routine["id"].as_str().unwrap();
+    let (_, created_item) = send_json(
+        &app,
+        Method::POST,
+        &format!("/api/routines/{routine_id}/items"),
+        None,
+        Some(json!({ "title": "Alias Habit" })),
+    )
+    .await;
+    let first_item_id = created_item["id"].as_str().unwrap();
+
+    let (ch6_status, _) = send_json(
+        &app,
+        Method::POST,
+        "/api/routines/logs",
+        None,
+        Some(json!({
+            "routine_item_id": first_item_id,
+            "item_id": first_item_id,
+            "log_date": "2026-11-14",
+            "date": "2026-11-14",
+            "status": "completed"
+        })),
+    )
+    .await;
+    assert_eq!(ch6_status, StatusCode::OK);
+
+    // Challenger 7: PUT /api/routines/checkins/2026-11-14 with all canonical + alias pairs
+    let (ch7_status, _) = send_json(
+        &app,
+        Method::PUT,
+        "/api/routines/checkins/2026-11-14",
+        None,
+        Some(json!({
+            "day_profile_used": "weekday",
+            "day_profile": "weekday",
+            "highlight": "Shipped M2D",
+            "highlights_md": "Shipped M2D",
+            "blocker": "None",
+            "blockers_md": "None",
+            "reflection_md": "Good pace",
+            "notes_md": "Good pace"
+        })),
+    )
+    .await;
+    assert_eq!(ch7_status, StatusCode::OK);
+
+    // Challenger 8: POST /api/tasks/quick-capture with raw + input + text (without raw_input)
+    let (ch8_status, ch8_val) = send_json(
+        &app,
+        Method::POST,
+        "/api/tasks/quick-capture",
+        None,
+        Some(json!({
+            "raw": "Pay rent !p1 @finance tomorrow",
+            "input": "Pay rent !p1 @finance tomorrow",
+            "text": "Pay rent !p1 @finance tomorrow"
+        })),
+    )
+    .await;
+    assert_eq!(ch8_status, StatusCode::OK);
+    assert_eq!(ch8_val["priority"], "urgent");
+    assert!(ch8_val["clean_title"].as_str().unwrap().starts_with("Pay rent"));
+
+    // Challenger 9: POST /api/hermes/chat with message+prompt+content, active_route+route, name+tool_name+tool, arguments+args+payload
+    let ch9_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/hermes/chat")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "message": "Hello",
+                "prompt": "Hello",
+                "content": "Hello",
+                "page_context": {"active_route": "/todos", "route": "/todos"},
+                "tool_call": {
+                    "name": "todos_list_tasks",
+                    "tool_name": "todos_list_tasks",
+                    "tool": "todos_list_tasks",
+                    "arguments": {},
+                    "args": {},
+                    "payload": {}
+                }
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let ch9_resp = app.clone().oneshot(ch9_req).await.unwrap();
+    assert_eq!(ch9_resp.status(), StatusCode::OK);
+
+    // Challenger 10: POST /api/agents/{id}/dispatch with sample_input + input + prompt
+    let (_, agents_list) =
+        send_json(&app, Method::GET, "/api/agents", None, None).await;
+    let agent_id = agents_list[0]["id"].as_str().unwrap();
+
+    let (ch10_status, _) = send_json(
+        &app,
+        Method::POST,
+        &format!("/api/agents/{agent_id}/dispatch"),
+        None,
+        Some(json!({
+            "dry_run": true,
+            "sample_input": "Audit vault",
+            "input": "Audit vault",
+            "prompt": "Audit vault"
+        })),
+    )
+    .await;
+    assert_eq!(ch10_status, StatusCode::OK);
+
+    // Challenger 11: POST /api/hermes/sessions/{key}/fork with turn_index + message_index + up_to_turn + branched_at_turn
+    let (_, sess_created) = send_json(
+        &app,
+        Method::POST,
+        "/api/hermes/sessions",
+        None,
+        Some(json!({
+            "title": "Parent Session",
+            "messages_json": [{"role": "user", "content": "Hi"}],
+            "initial_messages": [{"role": "user", "content": "Hi"}]
+        })),
+    )
+    .await;
+    let sess_key = sess_created["session_key"].as_str().unwrap();
+
+    let (ch11_status, _) = send_json(
+        &app,
+        Method::POST,
+        &format!("/api/hermes/sessions/{sess_key}/fork"),
+        None,
+        Some(json!({
+            "title": "Forked Session",
+            "turn_index": 0,
+            "message_index": 0,
+            "up_to_turn": 0,
+            "branched_at_turn": 0
+        })),
+    )
+    .await;
+    assert_eq!(ch11_status, StatusCode::CREATED);
+
+    test_db.teardown().await;
+}

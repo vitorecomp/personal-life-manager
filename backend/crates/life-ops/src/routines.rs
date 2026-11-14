@@ -1118,6 +1118,54 @@ impl LifeOpsService {
         })
     }
 
+    pub async fn get_weekly_review_json(
+        &self,
+        week_or_date: Option<&str>,
+    ) -> Result<(WeeklyReviewSummaryResponse, Option<serde_json::Value>), ApiError> {
+        let summary = self.get_weekly_review_summary(week_or_date).await?;
+        let stored: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT weekly_review_json FROM daily_checkins \
+             WHERE log_date BETWEEN $1 AND $2 \
+               AND weekly_review_json IS NOT NULL \
+               AND deleted_at IS NULL \
+             ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(summary.week_start)
+        .bind(summary.week_end)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok((summary, stored))
+    }
+
+    pub async fn upsert_weekly_review_by_key(
+        &self,
+        week_key: &str,
+        payload: Option<serde_json::Value>,
+    ) -> Result<(WeeklyReviewSummaryResponse, serde_json::Value), ApiError> {
+        let (summary, existing) = self.get_weekly_review_json(Some(week_key)).await?;
+        let mut merged = match existing {
+            Some(serde_json::Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
+        if let Some(serde_json::Value::Object(incoming)) = payload {
+            for (k, v) in incoming {
+                merged.insert(k, v);
+            }
+        }
+        let review_val = serde_json::Value::Object(merged);
+        let _ = self
+            .upsert_checkin(
+                summary.week_end,
+                UpsertDailyCheckinRequest {
+                    weekly_review_json: Some(review_val.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let refreshed = self.get_weekly_review_summary(Some(week_key)).await?;
+        Ok((refreshed, review_val))
+    }
+
     async fn render_daily_checkin_markdown(
         &self,
         checkin: &DailyCheckin,
@@ -1504,12 +1552,16 @@ fn render_weekly_review_markdown(
         .unwrap_or("");
     let challenges = review_json
         .get("challenges")
+        .or_else(|| review_json.get("challenges_md"))
         .or_else(|| review_json.get("blockers_md"))
+        .or_else(|| review_json.get("blockers"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let priorities = review_json
         .get("next_week_priorities")
         .or_else(|| review_json.get("next_steps_md"))
+        .or_else(|| review_json.get("adjustments_md"))
+        .or_else(|| review_json.get("adjustments"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
 

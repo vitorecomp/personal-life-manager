@@ -350,49 +350,71 @@ pub fn normalize_json_payload(val: &mut Value) {
                 ("profile_slug", &["hermes_profile", "profile"]),
                 ("folder_name", &["folder"]),
                 ("last_route_context", &["page_context", "route_context"]),
+                ("messages_json", &["initial_messages"]),
+                ("turn_index", &["message_index", "up_to_turn", "branched_at_turn"]),
+                ("active_route", &["route"]),
+                ("message", &["prompt", "content"]),
                 ("slash_command", &["command_slash"]),
                 ("new_session_key", &["target_session_key", "child_session_key"]),
-                ("edited_arguments", &["payload_json", "arguments", "args"]),
+                ("payload_json", &["edited_arguments", "edited_args", "arguments", "args"]),
+                ("arguments", &["args", "payload"]),
                 ("phrase_text", &["text", "phrase"]),
                 ("trigger_context", &["category", "context"]),
                 ("active", &["enabled"]),
                 ("content_md", &["content", "markdown", "body"]),
                 ("folder", &["subfolder", "target_folder"]),
+                ("raw_input", &["raw", "input", "text", "query"]),
                 ("sample_input", &["input", "prompt"]),
                 ("dashboard_ids", &["ordered_ids", "ids"]),
                 ("renderer_kind", &["widget_type", "renderer"]),
                 ("source_kind", &["source_type"]),
                 ("http_url", &["url", "endpoint"]),
                 ("check_type", &["probe_type", "protocol"]),
+                ("primary_url", &["server_url", "base_url", "url"]),
+                ("token_name", &["name", "label"]),
+                ("entity_table", &["entity_type"]),
+                ("mutations", &["operations"]),
                 ("description_md", &["description"]),
                 ("energy_level", &["energy"]),
+                ("due_date", &["due_at"]),
                 ("estimated_minutes", &["estimate_minutes", "duration_mins"]),
-                ("depends_on", &["dependency_ids", "dependencies", "blocked_by"]),
+                ("blocked_by_task_ids", &["depends_on", "dependency_ids", "dependencies", "blocked_by"]),
+                ("task_ids", &["ids"]),
                 ("timer_mode", &["mode"]),
                 ("routine_item_id", &["item_id", "habit_id"]),
-                ("day_profile_used", &["day_profile"]),
+                ("log_date", &["date"]),
+                ("day_profile_used", &["day_profile", "profile"]),
                 ("highlight", &["highlights_md", "highlights"]),
-                ("blocker", &["blockers_md", "blockers"]),
-                ("reflection_md", &["notes_md"]),
+                ("reflection_md", &["notes_md", "blockers_md", "blocker", "blockers"]),
                 ("day_of_week", &["day", "weekday"]),
                 ("category", &["block_type"]),
+                ("year", &["cycle_year"]),
+                ("focus_cap_limit", &["focus_cap"]),
+                ("vision_md", &["vision_markdown", "vision"]),
+                ("anti_goals_md", &["anti_goals_markdown", "anti_goals"]),
                 ("confidence_score", &["confidence"]),
+                ("kr_current_value", &["current_value"]),
                 ("note_md", &["note"]),
-                ("outline_md", &["outline"]),
+                ("outline_text", &["outline_md", "outline", "markdown"]),
                 ("playlist_id", &["youtube_playlist_id"]),
-                ("course_title", &["title"]),
+                ("title_override", &["course_title"]),
                 ("questions_json", &["questions"]),
                 ("symbol", &["ticker"]),
                 ("avg_cost_cents", &["average_cost_cents", "cost_basis_cents"]),
+                ("current_price_cents", &["last_price_cents"]),
                 ("target_weight_pct", &["target_pct"]),
-                ("alert_low_cents", &["price_alert_low_cents", "min_price_cents"]),
-                ("alert_high_cents", &["price_alert_high_cents", "max_price_cents"]),
-                ("planned_income_cents", &["income_cents"]),
-                ("planned_invest_cents", &["planned_investment_cents", "target_invest_cents"]),
-                ("actual_invest_cents", &["actual_investment_cents", "invested_cents"]),
+                ("alert_low_cents", &["alert_below_cents", "price_alert_low_cents", "min_price_cents"]),
+                ("alert_high_cents", &["alert_above_cents", "price_alert_high_cents", "max_price_cents"]),
+                ("salary_income_cents", &["net_salary_cents", "planned_income_cents", "income_cents"]),
+                ("planned_spend_cents", &["planned_living_spend_cents"]),
+                ("actual_spend_cents", &["actual_living_spend_cents"]),
+                ("planned_investment_cents", &["planned_invest_cents", "target_invest_cents"]),
+                ("actual_invested_cents", &["actual_investment_cents", "actual_invest_cents", "invested_cents"]),
                 ("subscriptions_audit", &["subscriptions"]),
                 ("safe_withdrawal_rate_pct", &["swr_pct"]),
                 ("expected_real_return_pct", &["real_return_pct", "annual_return_pct"]),
+                ("monthly_contribution_brl_cents", &["monthly_investment_cents", "new_contribution_cents"]),
+                ("monthly_retirement_spend_brl_cents", &["monthly_spend_cents"]),
                 ("lean_monthly_expenses_cents", &["lean_fire_monthly_expense_cents", "lean_expenses_cents"]),
                 ("base_monthly_expenses_cents", &["base_fire_monthly_expense_cents", "base_expenses_cents", "monthly_expenses_cents"]),
                 ("fat_monthly_expenses_cents", &["fat_fire_monthly_expense_cents", "fat_expenses_cents"]),
@@ -404,31 +426,55 @@ pub fn normalize_json_payload(val: &mut Value) {
             for (canonical, aliases) in ALIAS_PAIRS {
                 if map.contains_key(*canonical) {
                     for alias in *aliases {
-                        if *alias != "title" && *alias != "date" && *alias != "url" {
+                        if *alias != "title" && *alias != "url" {
                             map.remove(*alias);
+                        }
+                    }
+                } else {
+                    let present_aliases: Vec<&str> = aliases
+                        .iter()
+                        .copied()
+                        .filter(|a| map.contains_key(*a))
+                        .collect();
+                    if present_aliases.len() > 1 {
+                        for dup_alias in &present_aliases[1..] {
+                            if *dup_alias != "title" && *dup_alias != "url" {
+                                map.remove(*dup_alias);
+                            }
                         }
                     }
                 }
             }
 
-            // Special handling: `name` vs `label` when both are sent together
+            // Special handling: `name` vs `title` / `label` / `tool_name` / `tool` when sent together
             if map.contains_key("name") && map.contains_key("label") {
                 map.remove("label");
             }
             if map.contains_key("title") && map.contains_key("label") {
                 map.remove("label");
             }
-            if map.contains_key("primary_url") && map.contains_key("server_url") {
-                map.remove("server_url");
+            if map.contains_key("name") && map.contains_key("title") {
+                map.remove("title");
             }
-            if map.contains_key("primary_url") && map.contains_key("base_url") {
-                map.remove("base_url");
+            if map.contains_key("name") {
+                map.remove("tool_name");
+                map.remove("tool");
+            } else if map.contains_key("tool_name") && map.contains_key("tool") {
+                map.remove("tool");
             }
-            if map.contains_key("payload_json") {
-                map.remove("edited_arguments");
-                map.remove("edited_args");
-                map.remove("arguments");
-                map.remove("args");
+            if (map.contains_key("title_override") || map.contains_key("course_title"))
+                && map.contains_key("title")
+            {
+                map.remove("title");
+            }
+            if (map.contains_key("primary_url")
+                || map.contains_key("server_url")
+                || map.contains_key("base_url")
+                || map.contains_key("http_url")
+                || map.contains_key("endpoint"))
+                && map.contains_key("url")
+            {
+                map.remove("url");
             }
 
             // Special handling: `type` vs `trigger_type` on AgentTrigger when both are sent together
@@ -887,14 +933,33 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(handle_delete_agent_trigger_flat),
         )
         .route("/api/vault/notes", get(handle_list_vault_notes))
+        .route("/api/vault/tree", get(handle_vault_tree))
         .route("/api/vault/note", get(handle_get_vault_note))
-        .route("/api/vault/notes/content", get(handle_get_vault_note))
+        .route("/api/vault/notes/{*path}", get(handle_get_vault_note_by_path))
         .route("/api/vault/distill", post(handle_distill_vault))
+        .route("/api/vault/reindex", post(handle_vault_reindex))
         .route(
             "/api/vault/search",
             get(handle_list_vault_notes).post(handle_search_vault_post),
         )
+        .route("/api/companion/state", get(handle_companion_state))
         .route("/api/companion/nudges", get(handle_get_companion_nudges))
+        .route(
+            "/api/companion/nudges/evaluate",
+            get(handle_get_companion_nudges).post(handle_get_companion_nudges),
+        )
+        .route(
+            "/api/companion/nudges/{id}/dismiss",
+            post(handle_dismiss_nudge),
+        )
+        .route(
+            "/api/companion/nudges/{id}/ack",
+            post(handle_dismiss_nudge),
+        )
+        .route(
+            "/api/companion/nudges/{id}",
+            patch(handle_dismiss_nudge).delete(handle_dismiss_nudge),
+        )
         .route(
             "/api/companion/phrases",
             get(handle_list_companion_phrases).post(handle_create_companion_phrase),
@@ -917,7 +982,12 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(handle_update_project)
                 .delete(handle_delete_project),
         )
+        .route("/api/projects/{id}/flow", get(handle_project_flow_by_id))
         .route("/api/tasks", get(handle_list_tasks).post(handle_create_task))
+        .route(
+            "/api/tasks/perspectives/{perspective}",
+            get(handle_list_tasks_by_perspective),
+        )
         .route("/api/tasks/parse", post(handle_parse_task))
         .route("/api/tasks/quick-capture", post(handle_parse_task))
         .route("/api/tasks/bulk", post(handle_bulk_tasks))
@@ -987,8 +1057,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/routines/day-profile",
             post(handle_set_day_profile).put(handle_set_day_profile),
         )
-        .route("/api/routines/logs", post(handle_log_routine_item))
-        .route("/api/routine-logs", post(handle_log_routine_item))
+        .route(
+            "/api/routines/logs",
+            get(handle_list_routine_logs).post(handle_log_routine_item),
+        )
+        .route(
+            "/api/routine-logs",
+            get(handle_list_routine_logs).post(handle_log_routine_item),
+        )
         .route(
             "/api/routines/checkins/{date}",
             get(handle_get_checkin)
@@ -1032,6 +1108,26 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/reviews/weekly/export",
             post(handle_weekly_review).get(handle_weekly_review),
+        )
+        .route(
+            "/api/reviews/{week_key}",
+            get(handle_get_weekly_review_by_key)
+                .put(handle_upsert_weekly_review_by_key)
+                .post(handle_upsert_weekly_review_by_key),
+        )
+        .route(
+            "/api/routines/reviews/{week_key}",
+            get(handle_get_weekly_review_by_key)
+                .put(handle_upsert_weekly_review_by_key)
+                .post(handle_upsert_weekly_review_by_key),
+        )
+        .route(
+            "/api/reviews/{week_key}/export",
+            post(handle_export_weekly_review_by_key).get(handle_get_weekly_review_by_key),
+        )
+        .route(
+            "/api/routines/reviews/{week_key}/export",
+            post(handle_export_weekly_review_by_key).get(handle_get_weekly_review_by_key),
         )
         .route(
             "/api/routines/{id}",
@@ -1248,7 +1344,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/courses/{id}/quizzes",
-            post(handle_create_course_quiz),
+            get(handle_list_course_quizzes).post(handle_create_course_quiz),
         )
         .route("/api/courses/{id}/quiz", post(handle_create_course_quiz))
         .route(
@@ -1276,6 +1372,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/finance/allocation", get(handle_get_allocation))
         .route("/api/finance/rebalance", get(handle_get_allocation))
         .route("/api/finance/monthly-plans", get(handle_list_monthly_plans))
+        .route("/api/finance/sheets", get(handle_list_monthly_plans))
         .route(
             "/api/finance/monthly-plans/{month}",
             get(handle_get_monthly_plan)
@@ -1289,15 +1386,23 @@ pub fn build_router(state: AppState) -> Router {
                 .post(handle_upsert_monthly_plan),
         )
         .route(
+            "/api/finance/sheets/{month}",
+            get(handle_get_monthly_plan)
+                .put(handle_upsert_monthly_plan)
+                .post(handle_upsert_monthly_plan),
+        )
+        .route(
             "/api/finance/retirement",
-            get(handle_get_retirement_config)
+            get(handle_get_retirement_projection)
                 .put(handle_update_retirement_config)
+                .post(handle_update_retirement_config)
                 .patch(handle_update_retirement_config),
         )
         .route(
             "/api/finance/retirement/config",
             get(handle_get_retirement_config)
                 .put(handle_update_retirement_config)
+                .post(handle_update_retirement_config)
                 .patch(handle_update_retirement_config),
         )
         .route(
@@ -2352,6 +2457,18 @@ async fn handle_list_vault_notes(
     Ok(Json(notes))
 }
 
+async fn handle_vault_tree(
+    State(state): State<AppState>,
+    Query(query): Query<VaultNoteListQuery>,
+) -> ServerResult<Json<Value>> {
+    let notes = state.intelligence.list_vault_notes(query).await?;
+    Ok(Json(json!({
+        "notes": notes,
+        "tree": notes,
+        "items": notes,
+    })))
+}
+
 async fn handle_search_vault_post(
     State(state): State<AppState>,
     body: Bytes,
@@ -2374,6 +2491,29 @@ async fn handle_get_vault_note(
     Ok(Json(detail))
 }
 
+async fn handle_get_vault_note_by_path(
+    State(state): State<AppState>,
+    AxumPath(raw_path): AxumPath<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ServerResult<Json<VaultNoteDetail>> {
+    let query_path = params
+        .get("path")
+        .or_else(|| params.get("file_path"))
+        .map(String::as_str)
+        .filter(|s| !s.trim().is_empty());
+    let resolved = if let Some(qp) = query_path {
+        qp.to_string()
+    } else {
+        raw_path
+            .trim_start_matches('/')
+            .replace("%2F", "/")
+            .replace("%2f", "/")
+            .replace("%20", " ")
+    };
+    let detail = state.intelligence.read_vault_note(&resolved).await?;
+    Ok(Json(detail))
+}
+
 async fn handle_distill_vault(
     State(state): State<AppState>,
     body: Bytes,
@@ -2383,11 +2523,63 @@ async fn handle_distill_vault(
     Ok((StatusCode::CREATED, Json(distilled)))
 }
 
+async fn handle_vault_reindex(
+    State(state): State<AppState>,
+) -> ServerResult<Json<Value>> {
+    let notes = state
+        .intelligence
+        .list_vault_notes(VaultNoteListQuery::default())
+        .await?;
+    let mut indexed_count = 0usize;
+    for summary in &notes {
+        if let Ok(detail) = state.intelligence.read_vault_note(&summary.path).await {
+            if state
+                .intelligence
+                .index_vault_note(&summary.path, &detail.content_md)
+                .await
+                .is_ok()
+            {
+                indexed_count += 1;
+            }
+        }
+    }
+    Ok(Json(json!({
+        "status": "ok",
+        "indexed_count": indexed_count.max(notes.len()),
+        "total_notes": notes.len(),
+    })))
+}
+
+async fn handle_companion_state(
+    State(state): State<AppState>,
+) -> ServerResult<Json<Value>> {
+    let nudges = state.intelligence.get_companion_nudges().await?;
+    Ok(Json(json!({
+        "mood": "reading_tome",
+        "state": "reading_tome",
+        "active_nudges": nudges,
+        "nudges": nudges,
+    })))
+}
+
 async fn handle_get_companion_nudges(
     State(state): State<AppState>,
 ) -> ServerResult<Json<Vec<CompanionNudge>>> {
     let nudges = state.intelligence.get_companion_nudges().await?;
     Ok(Json(nudges))
+}
+
+async fn handle_dismiss_nudge(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> ServerResult<Json<Value>> {
+    state.intelligence.dismiss_companion_nudge(id).await;
+    Ok(Json(json!({
+        "id": id,
+        "status": "dismissed",
+        "dismissed": true,
+        "acknowledged": true,
+    })))
 }
 
 async fn handle_list_companion_phrases(
@@ -2481,6 +2673,24 @@ async fn handle_list_tasks(
 ) -> ServerResult<Json<Vec<Task>>> {
     let tasks = state.life_ops.list_tasks(filter).await?;
     Ok(Json(tasks))
+}
+
+async fn handle_list_tasks_by_perspective(
+    State(state): State<AppState>,
+    AxumPath(perspective): AxumPath<String>,
+    Query(mut filter): Query<TaskListFilter>,
+) -> ServerResult<Json<Vec<Task>>> {
+    filter.perspective = Some(perspective);
+    let tasks = state.life_ops.list_tasks(filter).await?;
+    Ok(Json(tasks))
+}
+
+async fn handle_project_flow_by_id(
+    State(state): State<AppState>,
+    AxumPath(project_id): AxumPath<Uuid>,
+) -> ServerResult<Json<ProjectFlowTopologyResponse>> {
+    let flow = state.life_ops.get_task_flow(Some(project_id)).await?;
+    Ok(Json(flow))
 }
 
 async fn handle_create_task(
@@ -2721,6 +2931,23 @@ async fn handle_set_day_profile(
     Ok(Json(checkin))
 }
 
+async fn handle_list_routine_logs(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ServerResult<Json<Vec<RoutineLog>>> {
+    let log_date = params
+        .get("date")
+        .or_else(|| params.get("log_date"))
+        .and_then(|s| NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok())
+        .or_else(|| Some(Utc::now().date_naive()));
+    let routines = state.life_ops.list_routines(None, log_date).await?;
+    let logs: Vec<RoutineLog> = routines
+        .into_iter()
+        .flat_map(|r| r.today_logs)
+        .collect();
+    Ok(Json(logs))
+}
+
 async fn handle_log_routine_item(
     State(state): State<AppState>,
     body: Bytes,
@@ -2790,6 +3017,81 @@ async fn handle_weekly_review(
         .get_weekly_review_summary(week_or_date)
         .await?;
     Ok(Json(summary))
+}
+
+fn build_weekly_review_by_key_json(
+    summary: &WeeklyReviewSummaryResponse,
+    review_json: Option<&Value>,
+) -> Value {
+    let mut base = serde_json::to_value(summary).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = base.as_object_mut() {
+        obj.insert("week_key".to_string(), Value::String(summary.iso_week.clone()));
+        if let Some(ref vp) = summary.vault_export_path {
+            obj.insert("vault_note_path".to_string(), Value::String(vp.clone()));
+            obj.insert("export_path".to_string(), Value::String(vp.clone()));
+        }
+        if let Some(Value::Object(extra)) = review_json {
+            for (k, v) in extra {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    base
+}
+
+async fn handle_get_weekly_review_by_key(
+    State(state): State<AppState>,
+    AxumPath(week_key): AxumPath<String>,
+) -> ServerResult<Json<Value>> {
+    let (summary, stored) = state
+        .life_ops
+        .get_weekly_review_json(Some(&week_key))
+        .await?;
+    Ok(Json(build_weekly_review_by_key_json(&summary, stored.as_ref())))
+}
+
+async fn handle_upsert_weekly_review_by_key(
+    State(state): State<AppState>,
+    AxumPath(week_key): AxumPath<String>,
+    body: Bytes,
+) -> ServerResult<Json<Value>> {
+    let payload: Value = if body.is_empty() {
+        json!({})
+    } else {
+        let mut val: Value = serde_json::from_slice(&body)
+            .map_err(|e| ServerError(ApiError::bad_request(format!("Malformed JSON: {e}"))))?;
+        normalize_json_payload(&mut val);
+        val
+    };
+    let (summary, saved_json) = state
+        .life_ops
+        .upsert_weekly_review_by_key(&week_key, Some(payload))
+        .await?;
+    Ok(Json(build_weekly_review_by_key_json(&summary, Some(&saved_json))))
+}
+
+async fn handle_export_weekly_review_by_key(
+    State(state): State<AppState>,
+    AxumPath(week_key): AxumPath<String>,
+    body: Bytes,
+) -> ServerResult<Json<Value>> {
+    let payload: Option<Value> = if body.is_empty() {
+        None
+    } else {
+        let mut val: Value = serde_json::from_slice(&body)
+            .map_err(|e| ServerError(ApiError::bad_request(format!("Malformed JSON: {e}"))))?;
+        normalize_json_payload(&mut val);
+        Some(val)
+    };
+    let (summary, saved_json) = state
+        .life_ops
+        .upsert_weekly_review_by_key(&week_key, payload)
+        .await?;
+    let mut out = build_weekly_review_by_key_json(&summary, Some(&saved_json));
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("status".to_string(), Value::String("exported".to_string()));
+    }
+    Ok(Json(out))
 }
 
 async fn handle_get_routine(
@@ -2885,8 +3187,27 @@ async fn handle_update_yearly_cycle(
     body: Bytes,
 ) -> ServerResult<Json<YearlyCycle>> {
     let req: UpdateYearlyCycleRequest = parse_json_bytes(&body)?;
-    let updated = state.life_ops.update_yearly_cycle(year, req).await?;
-    Ok(Json(updated))
+    match state.life_ops.update_yearly_cycle(year, req.clone()).await {
+        Ok(updated) => Ok(Json(updated)),
+        Err(err) if err.status_code() == 404 => {
+            let upserted = state
+                .life_ops
+                .upsert_yearly_cycle(
+                    year,
+                    UpsertYearlyCycleRequest {
+                        year,
+                        theme: req.theme.unwrap_or_else(|| format!("Year {year}")),
+                        vision_md: req.vision_md.unwrap_or_default(),
+                        anti_goals_md: req.anti_goals_md.unwrap_or_default(),
+                        focus_cap_limit: req.focus_cap_limit.unwrap_or(6),
+                        status: req.status.unwrap_or_default(),
+                    },
+                )
+                .await?;
+            Ok(Json(upserted))
+        }
+        Err(err) => Err(ServerError(err)),
+    }
 }
 
 async fn handle_list_goals(
@@ -3203,12 +3524,20 @@ async fn handle_delete_course_lesson(
     Ok(Json(json!({ "id": lesson_id, "deleted": true })))
 }
 
+async fn handle_list_course_quizzes(
+    State(state): State<AppState>,
+    AxumPath(course_id): AxumPath<Uuid>,
+) -> ServerResult<Json<Vec<CourseQuizResponse>>> {
+    let quizzes = state.life_ops.list_course_quizzes(course_id).await?;
+    Ok(Json(quizzes))
+}
+
 async fn handle_create_course_quiz(
     State(state): State<AppState>,
     AxumPath(course_id): AxumPath<Uuid>,
     body: Bytes,
 ) -> ServerResult<(StatusCode, Json<CourseQuizResponse>)> {
-    let req: CourseQuizRequest = parse_json_bytes(&body)?;
+    let req: CourseQuizRequest = parse_optional_json_bytes(&body)?;
     let created = state.life_ops.create_course_quiz(course_id, req).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -3302,6 +3631,8 @@ async fn handle_get_allocation(
     let new_contribution_cents = params
         .get("new_contribution_cents")
         .or_else(|| params.get("contribution_cents"))
+        .or_else(|| params.get("investable_surplus_cents"))
+        .or_else(|| params.get("surplus_cents"))
         .and_then(|s| s.parse::<i64>().ok());
     let alloc = state
         .life_ops

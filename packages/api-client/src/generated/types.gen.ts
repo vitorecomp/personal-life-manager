@@ -2458,6 +2458,25 @@ export type GetCompanionNudgesResponses = {
 
 export type GetCompanionNudgesResponse = GetCompanionNudgesResponses[keyof GetCompanionNudgesResponses];
 
+export type DismissCompanionNudgeData = {
+    body?: never;
+    path: {
+        /**
+         * Nudge UUID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/companion/nudges/{id}/dismiss';
+};
+
+export type DismissCompanionNudgeResponses = {
+    /**
+     * Dismissed companion nudge
+     */
+    200: unknown;
+};
+
 export type ListCompanionPhrasesData = {
     body?: never;
     path?: never;
@@ -2510,6 +2529,20 @@ export type DeleteCompanionPhraseData = {
 export type DeleteCompanionPhraseResponses = {
     /**
      * Soft-deleted companion phrase
+     */
+    200: unknown;
+};
+
+export type GetCompanionStateData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/companion/state';
+};
+
+export type GetCompanionStateResponses = {
+    /**
+     * Frieren companion mood and active nudges
      */
     200: unknown;
 };
@@ -2765,6 +2798,38 @@ export type ListYoutubePlaylistsResponses = {
 };
 
 export type ListYoutubePlaylistsResponse = ListYoutubePlaylistsResponses[keyof ListYoutubePlaylistsResponses];
+
+export type ImportYoutubePlaylistNestedData = {
+    body: ImportYoutubePlaylistRequest;
+    path?: never;
+    query?: never;
+    url: '/api/courses/youtube/import';
+};
+
+export type ImportYoutubePlaylistNestedResponses = {
+    /**
+     * Imported YouTube playlist as course
+     */
+    201: CourseSyllabusResponse;
+};
+
+export type ImportYoutubePlaylistNestedResponse = ImportYoutubePlaylistNestedResponses[keyof ImportYoutubePlaylistNestedResponses];
+
+export type ListYoutubePlaylistsNestedData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/courses/youtube/playlists';
+};
+
+export type ListYoutubePlaylistsNestedResponses = {
+    /**
+     * Playlists discovered from read-only youtube-lists.sqlite
+     */
+    200: YoutubePlaylistsResponse;
+};
+
+export type ListYoutubePlaylistsNestedResponse = ListYoutubePlaylistsNestedResponses[keyof ListYoutubePlaylistsNestedResponses];
 
 export type DeleteCourseData = {
     body?: never;
@@ -3405,9 +3470,9 @@ export type GetRetirementConfigData = {
 
 export type GetRetirementConfigResponses = {
     /**
-     * Singleton FIRE retirement configuration
+     * Singleton FIRE retirement projection and configuration
      */
-    200: RetirementConfig;
+    200: FireProjectionResponse;
 };
 
 export type GetRetirementConfigResponse = GetRetirementConfigResponses[keyof GetRetirementConfigResponses];
@@ -3837,6 +3902,22 @@ export type GetHealthResponses = {
 };
 
 export type GetHealthResponse = GetHealthResponses[keyof GetHealthResponses];
+
+export type HermesChatData = {
+    body: ChatStreamRequest;
+    path?: never;
+    query?: never;
+    url: '/api/hermes/chat';
+};
+
+export type HermesChatResponses = {
+    /**
+     * SSE stream of HermesStreamEvent frames
+     */
+    200: HermesStreamEvent;
+};
+
+export type HermesChatResponse = HermesChatResponses[keyof HermesChatResponses];
 
 export type StreamHermesChatData = {
     body: ChatStreamRequest;
@@ -4297,6 +4378,48 @@ export type GetReviewsWeeklyResponses = {
 };
 
 export type GetReviewsWeeklyResponse = GetReviewsWeeklyResponses[keyof GetReviewsWeeklyResponses];
+
+export type GetWeeklyReviewByKeyData = {
+    body?: never;
+    path: {
+        /**
+         * ISO week (YYYY-Www) or date
+         */
+        week_key: string;
+    };
+    query?: never;
+    url: '/api/reviews/{week_key}';
+};
+
+export type GetWeeklyReviewByKeyResponses = {
+    /**
+     * Weekly Review summary and saved reflections
+     */
+    200: WeeklyReviewSummaryResponse;
+};
+
+export type GetWeeklyReviewByKeyResponse = GetWeeklyReviewByKeyResponses[keyof GetWeeklyReviewByKeyResponses];
+
+export type UpsertWeeklyReviewByKeyData = {
+    body: unknown;
+    path: {
+        /**
+         * ISO week (YYYY-Www) or date
+         */
+        week_key: string;
+    };
+    query?: never;
+    url: '/api/reviews/{week_key}';
+};
+
+export type UpsertWeeklyReviewByKeyResponses = {
+    /**
+     * Upserted Weekly Review and exported Vault Markdown note
+     */
+    200: WeeklyReviewSummaryResponse;
+};
+
+export type UpsertWeeklyReviewByKeyResponse = UpsertWeeklyReviewByKeyResponses[keyof UpsertWeeklyReviewByKeyResponses];
 
 export type ListRoutinesData = {
     body?: never;
@@ -5028,6 +5151,22 @@ export type GetLifeScoreResponses = {
 
 export type GetLifeScoreResponse = GetLifeScoreResponses[keyof GetLifeScoreResponses];
 
+export type GetActiveTimeSessionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/time-sessions/active';
+};
+
+export type GetActiveTimeSessionResponses = {
+    /**
+     * Active focus timer state
+     */
+    200: ActiveTimerResponse;
+};
+
+export type GetActiveTimeSessionResponse = GetActiveTimeSessionResponses[keyof GetActiveTimeSessionResponses];
+
 export type ListTimeSessionsData = {
     body?: never;
     path?: never;
@@ -5225,6 +5364,59 @@ export type ListVaultNotesResponses = {
 };
 
 export type ListVaultNotesResponse = ListVaultNotesResponses[keyof ListVaultNotesResponses];
+
+export type ReindexVaultData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/vault/reindex';
+};
+
+export type ReindexVaultResponses = {
+    /**
+     * Re-indexed Second Brain Markdown notes
+     */
+    200: unknown;
+};
+
+export type SearchVaultNotesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Search query
+         */
+        q?: string;
+        /**
+         * Enable pgvector semantic search
+         */
+        semantic?: boolean;
+    };
+    url: '/api/vault/search';
+};
+
+export type SearchVaultNotesResponses = {
+    /**
+     * Matching Second Brain notes
+     */
+    200: Array<VaultNoteSummary>;
+};
+
+export type SearchVaultNotesResponse = SearchVaultNotesResponses[keyof SearchVaultNotesResponses];
+
+export type GetVaultTreeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/vault/tree';
+};
+
+export type GetVaultTreeResponses = {
+    /**
+     * Second Brain Markdown directory tree and notes
+     */
+    200: unknown;
+};
 
 export type GetWeeklyReviewSummaryData = {
     body?: never;

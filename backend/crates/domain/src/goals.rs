@@ -127,9 +127,9 @@ pub struct UpsertYearlyCycleRequest {
     #[serde(default = "default_cycle_year")]
     pub year: i32,
     pub theme: String,
-    #[serde(default)]
+    #[serde(default, alias = "vision_markdown", alias = "vision")]
     pub vision_md: String,
-    #[serde(default)]
+    #[serde(default, alias = "anti_goals_markdown", alias = "anti_goals")]
     pub anti_goals_md: String,
     #[serde(default = "default_focus_cap", alias = "focus_cap")]
     pub focus_cap_limit: i32,
@@ -140,7 +140,9 @@ pub struct UpsertYearlyCycleRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdateYearlyCycleRequest {
     pub theme: Option<String>,
+    #[serde(alias = "vision_markdown", alias = "vision")]
     pub vision_md: Option<String>,
+    #[serde(alias = "anti_goals_markdown", alias = "anti_goals")]
     pub anti_goals_md: Option<String>,
     #[serde(alias = "focus_cap")]
     pub focus_cap_limit: Option<i32>,

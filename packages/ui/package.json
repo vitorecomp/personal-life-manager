@@ -11,10 +11,11 @@
       "default": "./src/index.ts"
     },
     "./styles.css": "./src/styles.css",
+    "./sprites/*": "./src/assets/sprites/*",
     "./*": "./src/*"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node ./scripts/copy-build-assets.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

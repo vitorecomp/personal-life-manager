@@ -7,7 +7,7 @@ import {
   FuiPanel,
   FuiPanelHeader,
 } from '@hermes/ui';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type {
   DayProfile,
   MobileDailyCheckinRow,
@@ -65,6 +65,27 @@ export function RoutinesSurface({
   const [highlight, setHighlight] = useState<string>(dailyCheckin?.highlight ?? '');
   const [checkinSavedBanner, setCheckinSavedBanner] = useState<boolean>(false);
   const [newHabitTitleByRoutine, setNewHabitTitleByRoutine] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!dailyCheckin) return;
+    if (dailyCheckin.energy_score !== null && dailyCheckin.energy_score !== undefined) {
+      setEnergyScore(dailyCheckin.energy_score);
+    }
+    if (dailyCheckin.mood_score !== null && dailyCheckin.mood_score !== undefined) {
+      setMoodScore(dailyCheckin.mood_score);
+    }
+    if (dailyCheckin.sleep_hours !== null && dailyCheckin.sleep_hours !== undefined) {
+      setSleepHours(String(dailyCheckin.sleep_hours));
+    }
+    setHighlight(dailyCheckin.highlight ?? '');
+  }, [
+    dailyCheckin?.log_date,
+    dailyCheckin?.updated_at,
+    dailyCheckin?.energy_score,
+    dailyCheckin?.mood_score,
+    dailyCheckin?.sleep_hours,
+    dailyCheckin?.highlight,
+  ]);
 
   const totalItems = stacks.reduce((acc, s) => acc + s.totalCount, 0);
   const totalCompleted = stacks.reduce((acc, s) => acc + s.completedCount, 0);

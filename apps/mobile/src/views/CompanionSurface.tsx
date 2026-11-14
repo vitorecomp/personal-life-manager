@@ -92,8 +92,7 @@ export function CompanionSurface({
     return offlinePhrases.map((p) => ({
       id: p.id,
       phraseText: p.phrase_text,
-      triggerContext:
-        p.trigger_context === 'evening_reflection' ? 'any' : p.trigger_context,
+      triggerContext: p.trigger_context,
       animationHint: (p.animation_hint as CompanionAnimationHint | null) ?? 'read_grimoire',
     }));
   }, [offlinePhrases]);

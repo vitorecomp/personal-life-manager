@@ -163,16 +163,174 @@ export interface MobileDailyCheckinRow {
   deleted_at: string | null;
 }
 
+export type CanonicalPhraseTriggerContext =
+  | 'any'
+  | 'tap'
+  | 'screen_open'
+  | 'todo_done'
+  | 'routine_done';
+
+export type CanonicalPhraseAnimationHint =
+  | 'grimoire'
+  | 'stargazing'
+  | 'blue_flower_spell'
+  | 'tea'
+  | 'nod_off'
+  | 'mimic_gag'
+  | 'idle_gaze'
+  | 'wind_blink';
+
 export interface MobileOfflinePhraseRow {
   id: string;
   phrase_text: string;
-  trigger_context: 'any' | 'tap' | 'screen_open' | 'todo_done' | 'routine_done' | 'evening_reflection';
-  animation_hint: string | null;
+  trigger_context: CanonicalPhraseTriggerContext;
+  animation_hint: CanonicalPhraseAnimationHint | null;
   is_builtin: boolean;
   active: boolean;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+}
+
+const VALID_TRIGGER_CONTEXTS = new Set<CanonicalPhraseTriggerContext>([
+  'any',
+  'tap',
+  'screen_open',
+  'todo_done',
+  'routine_done',
+]);
+
+const VALID_ANIMATION_HINTS = new Set<CanonicalPhraseAnimationHint>([
+  'grimoire',
+  'stargazing',
+  'blue_flower_spell',
+  'tea',
+  'nod_off',
+  'mimic_gag',
+  'idle_gaze',
+  'wind_blink',
+]);
+
+export function normalizePhraseTriggerContext(
+  raw: string | null | undefined,
+): CanonicalPhraseTriggerContext {
+  const clean = (raw ?? '').trim().toLowerCase();
+  if (VALID_TRIGGER_CONTEXTS.has(clean as CanonicalPhraseTriggerContext)) {
+    return clean as CanonicalPhraseTriggerContext;
+  }
+  // Map legacy/alias contexts ('evening_reflection', 'morning', 'evening', 'idle', etc.) -> 'any'
+  return 'any';
+}
+
+export function normalizePhraseAnimationHint(
+  raw: string | null | undefined,
+): CanonicalPhraseAnimationHint | null {
+  if (raw === null || raw === undefined) return null;
+  const clean = raw.trim().toLowerCase();
+  if (!clean) return null;
+  if (VALID_ANIMATION_HINTS.has(clean as CanonicalPhraseAnimationHint)) {
+    return clean as CanonicalPhraseAnimationHint;
+  }
+  switch (clean) {
+    case 'read_grimoire':
+    case 'reading_grimoire':
+      return 'grimoire';
+    case 'wind_blink_loop':
+    case 'idle_breeze':
+      return 'wind_blink';
+    case 'cast_blue_flora':
+    case 'cast_spell':
+    case 'casting':
+      return 'blue_flower_spell';
+    case 'sip_tea':
+    case 'drink_tea':
+      return 'tea';
+    case 'cozy_nap':
+    case 'sleep_lean':
+    case 'sleeping':
+      return 'nod_off';
+    case 'celebrate_sparkle':
+      return 'mimic_gag';
+    case 'idle_ledge_sit':
+    case 'walk_ledge':
+    case 'calm_gaze':
+      return 'idle_gaze';
+    default:
+      return null;
+  }
+}
+
+export function clampSleepHours(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return null;
+  }
+  const clamped = Math.min(24, Math.max(0, value));
+  return Math.round(clamped * 100) / 100;
+}
+
+export function clampPulseScore(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.min(5, Math.max(1, Math.round(value)));
+}
+
+/**
+ * Epoch- and nanosecond-aware RFC 3339 / ISO 8601 comparator.
+ * Prevents stale whole-second `"2026-11-14T20:15:30Z"` or `"+00:00"` server strings
+ * from clobbering newer `.950Z` local rows due to raw ASCII `'.'` (46) < `'Z'` (90).
+ */
+export function compareIsoTimestamps(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  const strA = (a ?? '').trim();
+  const strB = (b ?? '').trim();
+  if (strA === strB) return 0;
+  if (!strA) return -1;
+  if (!strB) return 1;
+
+  const parseEpochAndSubSecNanos = (
+    raw: string,
+  ): { secMs: number; nanos: number } | null => {
+    const m = raw.match(
+      /^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$/i,
+    );
+    if (m) {
+      const datePart = m[1]!;
+      const timePart = m[2]!;
+      const frac = m[3] ?? '';
+      const rawTz = m[4] ? m[4].toUpperCase() : 'Z';
+      const tz =
+        rawTz === 'Z' || rawTz.includes(':')
+          ? rawTz
+          : `${rawTz.slice(0, 3)}:${rawTz.slice(3)}`;
+      const secMs = Date.parse(`${datePart}T${timePart}${tz}`);
+      if (!Number.isNaN(secMs)) {
+        const nanos = Number.parseInt(frac.padEnd(9, '0').slice(0, 9), 10) || 0;
+        return { secMs, nanos };
+      }
+    }
+    const fallbackMs = Date.parse(raw);
+    if (!Number.isNaN(fallbackMs)) {
+      return { secMs: fallbackMs, nanos: 0 };
+    }
+    return null;
+  };
+
+  const parsedA = parseEpochAndSubSecNanos(strA);
+  const parsedB = parseEpochAndSubSecNanos(strB);
+  if (parsedA && parsedB) {
+    if (parsedA.secMs !== parsedB.secMs) {
+      return parsedA.secMs > parsedB.secMs ? 1 : -1;
+    }
+    if (parsedA.nanos !== parsedB.nanos) {
+      return parsedA.nanos > parsedB.nanos ? 1 : -1;
+    }
+    return 0;
+  }
+
+  return strA > strB ? 1 : strA < strB ? -1 : 0;
 }
 
 export interface MobileSyncOutboxRow {
@@ -338,7 +496,7 @@ CREATE TABLE IF NOT EXISTS daily_checkins (
     )),
     energy_score INTEGER NULL CHECK (energy_score IS NULL OR (energy_score BETWEEN 1 AND 5)),
     mood_score INTEGER NULL CHECK (mood_score IS NULL OR (mood_score BETWEEN 1 AND 5)),
-    sleep_hours REAL NULL,
+    sleep_hours REAL NULL CHECK (sleep_hours IS NULL OR (sleep_hours >= 0 AND sleep_hours <= 24)),
     highlight TEXT NOT NULL DEFAULT '',
     reflection_md TEXT NOT NULL DEFAULT '',
     weekly_review_json TEXT NULL,
@@ -351,9 +509,11 @@ CREATE TABLE IF NOT EXISTS companion_offline_phrases (
     id TEXT PRIMARY KEY,
     phrase_text TEXT NOT NULL,
     trigger_context TEXT NOT NULL DEFAULT 'any' CHECK (trigger_context IN (
-        'any', 'tap', 'screen_open', 'todo_done', 'routine_done', 'evening_reflection'
+        'any', 'tap', 'screen_open', 'todo_done', 'routine_done'
     )),
-    animation_hint TEXT NULL,
+    animation_hint TEXT NULL CHECK (animation_hint IS NULL OR animation_hint IN (
+        'grimoire', 'stargazing', 'blue_flower_spell', 'tea', 'nod_off', 'mimic_gag', 'idle_gaze', 'wind_blink'
+    )),
     is_builtin INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
@@ -393,6 +553,7 @@ CREATE TABLE IF NOT EXISTS uplink_config (
     last_latency_ms INTEGER NULL,
     uplink_status TEXT NOT NULL DEFAULT 'offline' CHECK (uplink_status IN ('online', 'offline', 'syncing', 'auth_error')),
     session_key TEXT NOT NULL DEFAULT 'mobile-companion-main',
+    synced_entities_json TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL
 );
 `;
@@ -430,6 +591,15 @@ function parseJsonSafe<T>(raw: unknown, fallback: T): T {
   }
 }
 
+function stepIsoDateBackward(baseIsoDate: string, daysBack: number): string {
+  const parts = baseIsoDate.split('-').map((p) => Number.parseInt(p, 10));
+  const year = parts[0] || 2026;
+  const month = (parts[1] || 1) - 1;
+  const day = parts[2] || 1;
+  const dt = new Date(Date.UTC(year, month, day - daysBack));
+  return dt.toISOString().slice(0, 10);
+}
+
 const TABLE_TOPOLOGICAL_PRIORITY: Record<SyncEntityTable, number> = {
   projects: 1,
   tasks: 2,
@@ -459,6 +629,7 @@ export class MobileSqliteEngine {
     this.db = db;
     this.storageKey = storageKey;
     this.persistEnabled = persistEnabled;
+    this.db.run('PRAGMA foreign_keys = ON;');
   }
 
   static async create(options?: {
@@ -546,8 +717,23 @@ export class MobileSqliteEngine {
     return rows[0] ?? null;
   }
 
+  isForeignKeysEnabled(): boolean {
+    const row = this.queryOne('PRAGMA foreign_keys;');
+    return Number(row?.foreign_keys ?? 0) === 1;
+  }
+
   initializeSchemaAndSeeds(): void {
+    this.db.run('PRAGMA foreign_keys = ON;');
     this.db.run(MOBILE_SQLITE_SCHEMA_DDL);
+
+    // Ensure reloaded snapshots created prior to synced_entities_json have the column
+    const uplinkCols = this.queryAll('PRAGMA table_info(uplink_config);');
+    const hasSyncedCol = uplinkCols.some((c) => String(c.name) === 'synced_entities_json');
+    if (uplinkCols.length > 0 && !hasSyncedCol) {
+      this.db.run(
+        `ALTER TABLE uplink_config ADD COLUMN synced_entities_json TEXT NOT NULL DEFAULT '[]';`,
+      );
+    }
 
     const nowIso = '2026-11-14T08:00:00.000Z';
     const todayDate = new Date().toISOString().slice(0, 10);
@@ -560,8 +746,8 @@ export class MobileSqliteEngine {
         `INSERT INTO uplink_config (
           id, client_id, primary_server_url, fallback_server_url, active_server_url,
           encrypted_pat, token_prefix, last_server_seq, last_sync_at, last_verified_at,
-          last_latency_ms, uplink_status, session_key, updated_at
-        ) VALUES (1, ?, 'http://127.0.0.1:8080', '', 'http://127.0.0.1:8080', '', '', 0, NULL, NULL, NULL, 'offline', 'mobile-companion-main', ?)`,
+          last_latency_ms, uplink_status, session_key, synced_entities_json, updated_at
+        ) VALUES (1, ?, 'http://127.0.0.1:8080', '', 'http://127.0.0.1:8080', '', '', 0, NULL, NULL, NULL, 'offline', 'mobile-companion-main', '[]', ?)`,
         [clientId, nowIso],
       );
     }
@@ -889,16 +1075,214 @@ export class MobileSqliteEngine {
     return rows.map((r) => String(r.name));
   }
 
+  private readSyncedEntitiesSet(): Set<string> {
+    const row = this.queryOne(`SELECT synced_entities_json FROM uplink_config WHERE id = 1`);
+    const list = parseJsonSafe<string[]>(row?.synced_entities_json, []);
+    return new Set(list.filter((item) => typeof item === 'string' && item.length > 0));
+  }
+
+  private writeSyncedEntitiesSet(syncedSet: Set<string>): void {
+    const serialized = JSON.stringify(Array.from(syncedSet));
+    this.db.run(`UPDATE uplink_config SET synced_entities_json = ? WHERE id = 1`, [serialized]);
+  }
+
+  private hasPendingOutboxUpsert(entityTable: SyncEntityTable, entityId: string): boolean {
+    const row = this.queryOne(
+      `SELECT mutation_id FROM sync_outbox WHERE entity_table = ? AND entity_id = ? AND op = 'upsert' LIMIT 1`,
+      [entityTable, entityId],
+    );
+    return Boolean(row);
+  }
+
+  private isEntitySyncedOrQueued(
+    entityTable: SyncEntityTable,
+    entityId: string,
+    syncedSet: Set<string>,
+  ): boolean {
+    return (
+      syncedSet.has(`${entityTable}:${entityId}`) ||
+      this.hasPendingOutboxUpsert(entityTable, entityId)
+    );
+  }
+
+  private sanitizeOutboxPayload(
+    entityTable: SyncEntityTable,
+    op: 'upsert' | 'delete',
+    rawPayload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (op === 'delete') {
+      return { ...rawPayload };
+    }
+    const payload: Record<string, unknown> = { ...rawPayload };
+
+    if (entityTable === 'tasks') {
+      payload.tags = Array.isArray(payload.tags)
+        ? payload.tags.map((t) => String(t))
+        : parseJsonSafe<string[]>(payload.tags, []);
+      payload.blocked_by_task_ids = Array.isArray(payload.blocked_by_task_ids)
+        ? payload.blocked_by_task_ids.map((id) => String(id))
+        : parseJsonSafe<string[]>(payload.blocked_by_task_ids, []);
+    } else if (entityTable === 'routines') {
+      payload.active =
+        payload.active === undefined ? true : Boolean(payload.active);
+    } else if (entityTable === 'routine_items') {
+      if (typeof payload.frequency_config === 'string') {
+        payload.frequency_config = parseJsonSafe<Record<string, unknown>>(
+          payload.frequency_config,
+          {},
+        );
+      } else if (
+        typeof payload.frequency_config !== 'object' ||
+        payload.frequency_config === null ||
+        Array.isArray(payload.frequency_config)
+      ) {
+        payload.frequency_config = {};
+      }
+    } else if (entityTable === 'daily_checkins') {
+      if (payload.energy_score !== undefined) {
+        payload.energy_score = clampPulseScore(
+          payload.energy_score === null ? null : Number(payload.energy_score),
+        );
+      }
+      if (payload.mood_score !== undefined) {
+        payload.mood_score = clampPulseScore(
+          payload.mood_score === null ? null : Number(payload.mood_score),
+        );
+      }
+      if (payload.sleep_hours !== undefined) {
+        payload.sleep_hours = clampSleepHours(
+          payload.sleep_hours === null ? null : Number(payload.sleep_hours),
+        );
+      }
+    } else if (entityTable === 'companion_offline_phrases') {
+      payload.trigger_context = normalizePhraseTriggerContext(
+        payload.trigger_context ? String(payload.trigger_context) : 'any',
+      );
+      payload.animation_hint = normalizePhraseAnimationHint(
+        payload.animation_hint !== null && payload.animation_hint !== undefined
+          ? String(payload.animation_hint)
+          : null,
+      );
+      payload.is_builtin = Boolean(payload.is_builtin);
+      payload.active = payload.active === undefined ? true : Boolean(payload.active);
+    }
+
+    return payload;
+  }
+
+  /**
+   * Idempotently enqueues any unsynced local FK ancestor rows into `sync_outbox`
+   * before enqueuing a child `upsert` mutation so `POST /api/sync/push` never fails
+   * with PostgreSQL `23503` (`Foreign key constraint failed`).
+   */
+  private ensureParentOutboxChain(
+    entityTable: SyncEntityTable,
+    payload: Record<string, unknown>,
+    clientUpdatedAt: string,
+    visited: Set<string>,
+  ): void {
+    const syncedSet = this.readSyncedEntitiesSet();
+
+    if (entityTable === 'tasks') {
+      const projId = typeof payload.project_id === 'string' ? payload.project_id.trim() : '';
+      if (projId && !this.isEntitySyncedOrQueued('projects', projId, syncedSet)) {
+        const proj = this.getProject(projId);
+        if (proj) {
+          this.enqueueOutbox(
+            'projects',
+            proj.id,
+            'upsert',
+            { ...proj },
+            proj.updated_at || clientUpdatedAt,
+            visited,
+          );
+        }
+      }
+
+      const parentTaskId =
+        typeof payload.parent_task_id === 'string' ? payload.parent_task_id.trim() : '';
+      if (parentTaskId && !this.isEntitySyncedOrQueued('tasks', parentTaskId, syncedSet)) {
+        const parentTask = this.getTask(parentTaskId);
+        if (parentTask) {
+          this.enqueueOutbox(
+            'tasks',
+            parentTask.id,
+            'upsert',
+            { ...parentTask },
+            parentTask.updated_at || clientUpdatedAt,
+            visited,
+          );
+        }
+      }
+    } else if (entityTable === 'time_sessions') {
+      const taskId = typeof payload.task_id === 'string' ? payload.task_id.trim() : '';
+      if (taskId && !this.isEntitySyncedOrQueued('tasks', taskId, syncedSet)) {
+        const parentTask = this.getTask(taskId);
+        if (parentTask) {
+          this.enqueueOutbox(
+            'tasks',
+            parentTask.id,
+            'upsert',
+            { ...parentTask },
+            parentTask.updated_at || clientUpdatedAt,
+            visited,
+          );
+        }
+      }
+    } else if (entityTable === 'routine_items') {
+      const routineId = typeof payload.routine_id === 'string' ? payload.routine_id.trim() : '';
+      if (routineId && !this.isEntitySyncedOrQueued('routines', routineId, syncedSet)) {
+        const parentRoutine = this.getRoutine(routineId);
+        if (parentRoutine) {
+          this.enqueueOutbox(
+            'routines',
+            parentRoutine.id,
+            'upsert',
+            { ...parentRoutine },
+            parentRoutine.updated_at || clientUpdatedAt,
+            visited,
+          );
+        }
+      }
+    } else if (entityTable === 'routine_logs') {
+      const itemId =
+        typeof payload.routine_item_id === 'string' ? payload.routine_item_id.trim() : '';
+      if (itemId && !this.isEntitySyncedOrQueued('routine_items', itemId, syncedSet)) {
+        const parentItem = this.getRoutineItem(itemId);
+        if (parentItem) {
+          this.enqueueOutbox(
+            'routine_items',
+            parentItem.id,
+            'upsert',
+            { ...parentItem },
+            parentItem.updated_at || clientUpdatedAt,
+            visited,
+          );
+        }
+      }
+    }
+  }
+
   private enqueueOutbox(
     entityTable: SyncEntityTable,
     entityId: string,
     op: 'upsert' | 'delete',
-    payload: Record<string, unknown>,
+    rawPayload: Record<string, unknown>,
     clientUpdatedAt: string,
+    visited: Set<string> = new Set(),
   ): MobileSyncOutboxRow {
     if (!ALLOWED_SYNC_TABLES.includes(entityTable)) {
       throw new Error(`Invalid sync table: ${entityTable}`);
     }
+
+    const visitKey = `${entityTable}:${entityId}:${op}`;
+    const payload = this.sanitizeOutboxPayload(entityTable, op, rawPayload);
+
+    if (op === 'upsert' && !visited.has(visitKey)) {
+      visited.add(visitKey);
+      this.ensureParentOutboxChain(entityTable, payload, clientUpdatedAt, visited);
+    }
+
     const mutationId = generateUuidV7();
     const createdAt = new Date().toISOString();
     const payloadJson = JSON.stringify(payload);
@@ -927,11 +1311,8 @@ export class MobileSqliteEngine {
   // Projects & Tasks (Module 07)
   // =========================================================================
 
-  listProjects(): MobileProjectRow[] {
-    const rows = this.queryAll(
-      `SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY name ASC`,
-    );
-    return rows.map((r) => ({
+  private mapProjectRow(r: Record<string, unknown>): MobileProjectRow {
+    return {
       id: String(r.id),
       name: String(r.name),
       area: String(r.area || 'personal'),
@@ -941,7 +1322,101 @@ export class MobileSqliteEngine {
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
       deleted_at: r.deleted_at ? String(r.deleted_at) : null,
-    }));
+    };
+  }
+
+  listProjects(): MobileProjectRow[] {
+    const rows = this.queryAll(
+      `SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY name ASC`,
+    );
+    return rows.map((r) => this.mapProjectRow(r));
+  }
+
+  getProject(projectId: string): MobileProjectRow | null {
+    const row = this.queryOne(`SELECT * FROM projects WHERE id = ?`, [projectId]);
+    return row ? this.mapProjectRow(row) : null;
+  }
+
+  createProject(input: {
+    name: string;
+    area?: string;
+    status?: MobileProjectRow['status'];
+    color?: string;
+    goalId?: string | null;
+  }): MobileProjectRow {
+    const trimmed = (input.name ?? '').trim();
+    if (!trimmed) {
+      throw new Error('Project name cannot be blank');
+    }
+    const validAreas = new Set([
+      'career',
+      'health',
+      'learning',
+      'finance',
+      'personal',
+      'personal_project',
+      'relationships',
+      'systems',
+    ]);
+    const rawArea = (input.area ?? 'personal').trim().toLowerCase();
+    const area = validAreas.has(rawArea) ? rawArea : 'personal';
+    const validStatuses = new Set(['active', 'paused', 'completed', 'archived']);
+    const status =
+      input.status && validStatuses.has(input.status) ? input.status : 'active';
+    const color = (input.color ?? '#F87C18').trim() || '#F87C18';
+    const nowIso = new Date().toISOString();
+    const id = generateUuidV7();
+
+    const project: MobileProjectRow = {
+      id,
+      name: trimmed,
+      area,
+      goal_id: input.goalId ?? null,
+      status,
+      color,
+      created_at: nowIso,
+      updated_at: nowIso,
+      deleted_at: null,
+    };
+
+    this.db.run(
+      `INSERT INTO projects (
+        id, name, area, goal_id, status, color, created_at, updated_at, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [
+        project.id,
+        project.name,
+        project.area,
+        project.goal_id,
+        project.status,
+        project.color,
+        project.created_at,
+        project.updated_at,
+      ],
+    );
+
+    this.enqueueOutbox('projects', project.id, 'upsert', { ...project }, nowIso);
+    this.persistSnapshot();
+    return project;
+  }
+
+  deleteProject(projectId: string): boolean {
+    const existing = this.getProject(projectId);
+    if (!existing || existing.deleted_at) return false;
+
+    const nowIso = new Date().toISOString();
+    this.db.run(`UPDATE tasks SET project_id = NULL, updated_at = ? WHERE project_id = ?`, [
+      nowIso,
+      projectId,
+    ]);
+    this.db.run(`UPDATE projects SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
+      nowIso,
+      nowIso,
+      projectId,
+    ]);
+    this.enqueueOutbox('projects', projectId, 'delete', { id: projectId, deleted_at: nowIso }, nowIso);
+    this.persistSnapshot();
+    return true;
   }
 
   private mapTaskRow(r: Record<string, unknown>): MobileTaskRow {
@@ -993,6 +1468,7 @@ export class MobileSqliteEngine {
   createTaskFromQuickCapture(
     rawInput: string,
     todayIsoDate: string = new Date().toISOString().slice(0, 10),
+    options?: { projectId?: string | null },
   ): { task: MobileTaskRow; mutation: MobileSyncOutboxRow } {
     const parsed = parseTodoQuickCapture(rawInput, todayIsoDate);
     if (!parsed.valid) {
@@ -1000,20 +1476,22 @@ export class MobileSqliteEngine {
     }
 
     let resolvedProjectId: string | null = null;
-    if (parsed.projectHint) {
-      const hintLower = parsed.projectHint.toLowerCase();
-      const matched = this.listProjects().find(
-        (p) =>
-          p.name.toLowerCase().includes(hintLower) ||
-          p.name.toLowerCase().replace(/\s+/g, '-') === hintLower,
-      );
+    if (options?.projectId) {
+      const explicitProj = this.getProject(options.projectId);
+      if (!explicitProj || explicitProj.deleted_at) {
+        throw new Error(`Project not found: ${options.projectId}`);
+      }
+      resolvedProjectId = explicitProj.id;
+    } else if (parsed.projectHint) {
+      const hintSlug = parsed.projectHint.toLowerCase().replace(/[\s_]+/g, '-');
+      const matched = this.listProjects().find((p) => {
+        const nameLower = p.name.toLowerCase();
+        const nameSlug = nameLower.replace(/[\s_]+/g, '-');
+        return nameLower === parsed.projectHint!.toLowerCase() || nameSlug === hintSlug;
+      });
       if (matched) {
         resolvedProjectId = matched.id;
       }
-    }
-    if (!resolvedProjectId) {
-      const firstProj = this.listProjects()[0];
-      resolvedProjectId = firstProj?.id ?? null;
     }
 
     const nowIso = new Date().toISOString();
@@ -1077,7 +1555,7 @@ export class MobileSqliteEngine {
 
   toggleTaskCompletion(taskId: string): MobileTaskRow | null {
     const existing = this.getTask(taskId);
-    if (!existing) return null;
+    if (!existing || existing.deleted_at) return null;
 
     const nowIso = new Date().toISOString();
     const nextStatus: MobileTaskRow['status'] = existing.status === 'done' ? 'todo' : 'done';
@@ -1096,7 +1574,7 @@ export class MobileSqliteEngine {
 
   deleteTask(taskId: string): boolean {
     const existing = this.getTask(taskId);
-    if (!existing) return false;
+    if (!existing || existing.deleted_at) return false;
 
     const nowIso = new Date().toISOString();
     this.db.run(`UPDATE tasks SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
@@ -1153,11 +1631,20 @@ export class MobileSqliteEngine {
     taskId?: string | null;
     timerMode?: TimerMode;
     notes?: string;
+    startedAtIso?: string;
   }): MobileTimeSessionRow {
-    // Auto-stop any currently running timer first
+    const requestedTaskId = options.taskId ? options.taskId.trim() : null;
+    if (requestedTaskId) {
+      const targetTask = this.getTask(requestedTaskId);
+      if (!targetTask || targetTask.deleted_at) {
+        throw new Error(`Task not found for focus timer: ${requestedTaskId}`);
+      }
+    }
+
+    // Auto-stop any currently running timer using real elapsed duration (never hardcoded 60s!)
     const running = this.getActiveTimer();
     if (running) {
-      this.stopFocusTimer(60);
+      this.stopFocusTimer();
     }
 
     const mode = options.timerMode ?? 'pomodoro_25_5';
@@ -1174,7 +1661,7 @@ export class MobileSqliteEngine {
       breakMinutes = 15;
     }
 
-    const nowIso = new Date().toISOString();
+    const nowIso = options.startedAtIso ?? new Date().toISOString();
     const id = generateUuidV7();
     this.db.run(
       `INSERT INTO time_sessions (
@@ -1183,7 +1670,7 @@ export class MobileSqliteEngine {
       ) VALUES (?, ?, NULL, NULL, 'deep_work', ?, ?, ?, ?, NULL, 0, ?, ?, ?, NULL)`,
       [
         id,
-        options.taskId ?? null,
+        requestedTaskId,
         mode,
         workMinutes,
         breakMinutes,
@@ -1206,13 +1693,14 @@ export class MobileSqliteEngine {
     if (!running) return null;
 
     const nowIso = new Date().toISOString();
+    const startedMs = Date.parse(running.started_at);
+    const rawElapsed = Number.isFinite(startedMs)
+      ? Math.round((Date.now() - startedMs) / 1000)
+      : 1;
     const elapsedSec =
       overrideDurationSeconds !== undefined
         ? Math.max(1, Math.floor(overrideDurationSeconds))
-        : Math.max(
-            60,
-            Math.round((Date.now() - new Date(running.started_at).getTime()) / 1000),
-          );
+        : Math.max(1, rawElapsed);
 
     this.db.run(
       `UPDATE time_sessions SET ended_at = ?, duration_seconds = ?, updated_at = ? WHERE id = ?`,
@@ -1222,11 +1710,10 @@ export class MobileSqliteEngine {
     const completedSession = this.mapTimeSessionRow(
       this.queryOne(`SELECT * FROM time_sessions WHERE id = ?`, [running.id])!,
     );
-    this.enqueueOutbox('time_sessions', completedSession.id, 'upsert', { ...completedSession }, nowIso);
 
     if (completedSession.task_id) {
       const task = this.getTask(completedSession.task_id);
-      if (task) {
+      if (task && !task.deleted_at) {
         const nextActual = task.actual_seconds + elapsedSec;
         this.db.run(`UPDATE tasks SET actual_seconds = ?, updated_at = ? WHERE id = ?`, [
           nextActual,
@@ -1238,6 +1725,14 @@ export class MobileSqliteEngine {
       }
     }
 
+    this.enqueueOutbox(
+      'time_sessions',
+      completedSession.id,
+      'upsert',
+      { ...completedSession },
+      nowIso,
+    );
+
     this.persistSnapshot();
     return completedSession;
   }
@@ -1245,6 +1740,165 @@ export class MobileSqliteEngine {
   // =========================================================================
   // Routines, Habit Logs, Streaks & Daily Check-ins (Module 08)
   // =========================================================================
+
+  private mapRoutineRow(r: Record<string, unknown>): MobileRoutineRow {
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      time_slot: (r.time_slot as RoutineTimeSlot) || 'morning',
+      day_profile: ((r.day_profile as DayProfile | 'all') || 'workday'),
+      target_start_time: r.target_start_time ? String(r.target_start_time) : null,
+      sort_order: Number(r.sort_order ?? 0),
+      active: Boolean(r.active),
+      created_at: String(r.created_at),
+      updated_at: String(r.updated_at),
+      deleted_at: r.deleted_at ? String(r.deleted_at) : null,
+    };
+  }
+
+  private mapRoutineItemRow(ir: Record<string, unknown>): MobileRoutineItemRow {
+    return {
+      id: String(ir.id),
+      routine_id: String(ir.routine_id),
+      goal_id: ir.goal_id ? String(ir.goal_id) : null,
+      title: String(ir.title),
+      tracking_type: (ir.tracking_type as MobileRoutineItemRow['tracking_type']) || 'boolean',
+      target_value:
+        ir.target_value !== null && ir.target_value !== undefined
+          ? Number(ir.target_value)
+          : null,
+      unit: ir.unit ? String(ir.unit) : null,
+      frequency_type:
+        (ir.frequency_type as MobileRoutineItemRow['frequency_type']) || 'daily',
+      frequency_config: parseJsonSafe<Record<string, unknown>>(ir.frequency_config, {}),
+      estimated_minutes:
+        ir.estimated_minutes !== null && ir.estimated_minutes !== undefined
+          ? Number(ir.estimated_minutes)
+          : null,
+      sort_order: Number(ir.sort_order ?? 0),
+      created_at: String(ir.created_at),
+      updated_at: String(ir.updated_at),
+      deleted_at: ir.deleted_at ? String(ir.deleted_at) : null,
+    };
+  }
+
+  listRoutines(): MobileRoutineRow[] {
+    const rows = this.queryAll(
+      `SELECT * FROM routines WHERE deleted_at IS NULL ORDER BY sort_order ASC, name ASC`,
+    );
+    return rows.map((r) => this.mapRoutineRow(r));
+  }
+
+  getRoutine(routineId: string): MobileRoutineRow | null {
+    const row = this.queryOne(`SELECT * FROM routines WHERE id = ?`, [routineId]);
+    return row ? this.mapRoutineRow(row) : null;
+  }
+
+  getRoutineItem(routineItemId: string): MobileRoutineItemRow | null {
+    const row = this.queryOne(`SELECT * FROM routine_items WHERE id = ?`, [routineItemId]);
+    return row ? this.mapRoutineItemRow(row) : null;
+  }
+
+  createRoutine(input: {
+    name: string;
+    timeSlot?: RoutineTimeSlot;
+    dayProfile?: DayProfile | 'all';
+    targetStartTime?: string | null;
+    sortOrder?: number;
+    active?: boolean;
+  }): MobileRoutineRow {
+    const trimmed = (input.name ?? '').trim();
+    if (!trimmed) {
+      throw new Error('Routine name cannot be blank');
+    }
+    const validSlots = new Set<RoutineTimeSlot>([
+      'morning',
+      'afternoon',
+      'shutdown',
+      'evening',
+      'custom',
+    ]);
+    const timeSlot: RoutineTimeSlot =
+      input.timeSlot && validSlots.has(input.timeSlot) ? input.timeSlot : 'morning';
+    const validProfiles = new Set<DayProfile | 'all'>([
+      'workday',
+      'weekend',
+      'travel',
+      'minimum_viable',
+      'all',
+    ]);
+    const dayProfile: DayProfile | 'all' =
+      input.dayProfile && validProfiles.has(input.dayProfile) ? input.dayProfile : 'workday';
+    const targetStartTime = input.targetStartTime ? input.targetStartTime.trim() : null;
+    const sortOrder = input.sortOrder ?? 0;
+    const active = input.active ?? true;
+    const nowIso = new Date().toISOString();
+    const id = generateUuidV7();
+
+    const routine: MobileRoutineRow = {
+      id,
+      name: trimmed,
+      time_slot: timeSlot,
+      day_profile: dayProfile,
+      target_start_time: targetStartTime,
+      sort_order: sortOrder,
+      active,
+      created_at: nowIso,
+      updated_at: nowIso,
+      deleted_at: null,
+    };
+
+    this.db.run(
+      `INSERT INTO routines (
+        id, name, time_slot, day_profile, target_start_time, sort_order, active, created_at, updated_at, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [
+        routine.id,
+        routine.name,
+        routine.time_slot,
+        routine.day_profile,
+        routine.target_start_time,
+        routine.sort_order,
+        routine.active ? 1 : 0,
+        routine.created_at,
+        routine.updated_at,
+      ],
+    );
+
+    this.enqueueOutbox('routines', routine.id, 'upsert', { ...routine }, nowIso);
+    this.persistSnapshot();
+    return routine;
+  }
+
+  deleteRoutine(routineId: string): boolean {
+    const existing = this.getRoutine(routineId);
+    if (!existing || existing.deleted_at) return false;
+
+    const nowIso = new Date().toISOString();
+    this.db.run(
+      `UPDATE routine_logs SET deleted_at = ?, updated_at = ?
+       WHERE routine_item_id IN (SELECT id FROM routine_items WHERE routine_id = ?)`,
+      [nowIso, nowIso, routineId],
+    );
+    this.db.run(
+      `UPDATE routine_items SET deleted_at = ?, updated_at = ? WHERE routine_id = ?`,
+      [nowIso, nowIso, routineId],
+    );
+    this.db.run(
+      `UPDATE routines SET deleted_at = ?, active = 0, updated_at = ? WHERE id = ?`,
+      [nowIso, nowIso, routineId],
+    );
+
+    this.enqueueOutbox(
+      'routines',
+      routineId,
+      'delete',
+      { id: routineId, deleted_at: nowIso },
+      nowIso,
+    );
+    this.persistSnapshot();
+    return true;
+  }
 
   listRoutineStacks(
     dayProfile: DayProfile = 'workday',
@@ -1280,9 +1934,48 @@ export class MobileSqliteEngine {
       logsByItem.set(mapped.routine_item_id, arr);
     }
 
+    /**
+     * Counts consecutive `'completed'` calendar days walking backward from `logDate`.
+     * Allows `logDate` itself to be unlogged (or in-progress `'partial'`) if `logDate - 1`
+     * was `'completed'`, and breaks immediately to `0` on `'skipped'` or missing days.
+     */
     const computeItemStreak = (itemId: string): number => {
-      const itemLogs = (logsByItem.get(itemId) ?? []).filter((l) => l.status === 'completed');
-      return itemLogs.length;
+      const itemLogs = logsByItem.get(itemId) ?? [];
+      if (itemLogs.length === 0) return 0;
+
+      const statusByDate = new Map<string, MobileRoutineLogRow['status']>();
+      for (const log of itemLogs) {
+        if (!statusByDate.has(log.log_date)) {
+          statusByDate.set(log.log_date, log.status);
+        }
+      }
+
+      const todayStatus = statusByDate.get(logDate);
+      if (todayStatus === 'skipped') {
+        return 0;
+      }
+
+      let streak = 0;
+      let offset = 0;
+      if (todayStatus === 'completed') {
+        streak = 1;
+        offset = 1;
+      } else {
+        // Unlogged or partial on logDate: check consecutive completions starting yesterday
+        offset = 1;
+      }
+
+      for (let guard = 0; guard < 3660; guard += 1) {
+        const checkDate = stepIsoDateBackward(logDate, offset);
+        if (statusByDate.get(checkDate) === 'completed') {
+          streak += 1;
+          offset += 1;
+        } else {
+          break;
+        }
+      }
+
+      return streak;
     };
 
     const stacks: MobileRoutineStackView[] = [];
@@ -1297,39 +1990,22 @@ export class MobileSqliteEngine {
       const mappedItems: MobileRoutineItemWithLog[] = [];
 
       for (const ir of rawItemsForStack) {
-        const freqConfig = parseJsonSafe<Record<string, unknown>>(ir.frequency_config, {});
-        const itemId = String(ir.id);
-        const itemLogs = logsByItem.get(itemId) ?? [];
+        const mappedBase = this.mapRoutineItemRow(ir);
+        const itemLogs = logsByItem.get(mappedBase.id) ?? [];
         const todayLog = itemLogs.find((l) => l.log_date === logDate) ?? null;
 
-        if (dayProfile === 'minimum_viable' && freqConfig.mvd_included === false && !todayLog) {
+        if (
+          dayProfile === 'minimum_viable' &&
+          mappedBase.frequency_config.mvd_included === false &&
+          !todayLog
+        ) {
           continue;
         }
 
         mappedItems.push({
-          id: itemId,
-          routine_id: routineId,
-          goal_id: ir.goal_id ? String(ir.goal_id) : null,
-          title: String(ir.title),
-          tracking_type: (ir.tracking_type as MobileRoutineItemRow['tracking_type']) || 'boolean',
-          target_value:
-            ir.target_value !== null && ir.target_value !== undefined
-              ? Number(ir.target_value)
-              : null,
-          unit: ir.unit ? String(ir.unit) : null,
-          frequency_type:
-            (ir.frequency_type as MobileRoutineItemRow['frequency_type']) || 'daily',
-          frequency_config: freqConfig,
-          estimated_minutes:
-            ir.estimated_minutes !== null && ir.estimated_minutes !== undefined
-              ? Number(ir.estimated_minutes)
-              : null,
-          sort_order: Number(ir.sort_order ?? 0),
-          created_at: String(ir.created_at),
-          updated_at: String(ir.updated_at),
-          deleted_at: ir.deleted_at ? String(ir.deleted_at) : null,
+          ...mappedBase,
           todayLog,
-          streakDays: computeItemStreak(itemId),
+          streakDays: computeItemStreak(mappedBase.id),
         });
       }
 
@@ -1370,13 +2046,20 @@ export class MobileSqliteEngine {
     overrideStatus?: 'completed' | 'partial' | 'skipped',
     overrideNumericValue?: number | null,
   ): MobileRoutineLogRow {
+    const itemRow = this.queryOne(
+      `SELECT * FROM routine_items WHERE id = ? AND deleted_at IS NULL`,
+      [routineItemId],
+    );
+    if (!itemRow) {
+      throw new Error(`Parent routine_item not found: ${routineItemId}`);
+    }
+
     const existing = this.queryOne(
       `SELECT * FROM routine_logs WHERE routine_item_id = ? AND log_date = ?`,
       [routineItemId, logDate],
     );
-    const itemRow = this.queryOne(`SELECT * FROM routine_items WHERE id = ?`, [routineItemId]);
     const targetVal =
-      itemRow?.target_value !== null && itemRow?.target_value !== undefined
+      itemRow.target_value !== null && itemRow.target_value !== undefined
         ? Number(itemRow.target_value)
         : 1;
 
@@ -1433,9 +2116,15 @@ export class MobileSqliteEngine {
     delta: number,
     logDate: string = new Date().toISOString().slice(0, 10),
   ): MobileRoutineLogRow {
-    const itemRow = this.queryOne(`SELECT * FROM routine_items WHERE id = ?`, [routineItemId]);
+    const itemRow = this.queryOne(
+      `SELECT * FROM routine_items WHERE id = ? AND deleted_at IS NULL`,
+      [routineItemId],
+    );
+    if (!itemRow) {
+      throw new Error(`Parent routine_item not found: ${routineItemId}`);
+    }
     const targetVal =
-      itemRow?.target_value !== null && itemRow?.target_value !== undefined
+      itemRow.target_value !== null && itemRow.target_value !== undefined
         ? Number(itemRow.target_value)
         : 10;
     const existing = this.queryOne(
@@ -1464,6 +2153,11 @@ export class MobileSqliteEngine {
     if (!trimmed) {
       throw new Error('Routine item title cannot be blank');
     }
+    const parentRoutine = this.getRoutine(input.routineId);
+    if (!parentRoutine || parentRoutine.deleted_at) {
+      throw new Error(`Parent routine not found: ${input.routineId}`);
+    }
+
     const nowIso = new Date().toISOString();
     const id = generateUuidV7();
     const trackingType = input.trackingType ?? 'boolean';
@@ -1553,10 +2247,9 @@ export class MobileSqliteEngine {
     const nowIso = new Date().toISOString();
     const createdAt = existing?.created_at ?? nowIso;
     const dayProfileUsed = input.dayProfileUsed ?? existing?.day_profile_used ?? 'workday';
-    const energy =
-      input.energyScore !== null ? Math.min(5, Math.max(1, Math.round(input.energyScore))) : null;
-    const mood =
-      input.moodScore !== null ? Math.min(5, Math.max(1, Math.round(input.moodScore))) : null;
+    const energy = clampPulseScore(input.energyScore);
+    const mood = clampPulseScore(input.moodScore);
+    const sleepHours = clampSleepHours(input.sleepHours);
 
     this.db.run(
       `INSERT INTO daily_checkins (
@@ -1577,7 +2270,7 @@ export class MobileSqliteEngine {
         dayProfileUsed,
         energy,
         mood,
-        input.sleepHours,
+        sleepHours,
         input.highlight.trim(),
         (input.reflectionMd ?? '').trim(),
         createdAt,
@@ -1608,9 +2301,12 @@ export class MobileSqliteEngine {
     return rows.map((r) => ({
       id: String(r.id),
       phrase_text: String(r.phrase_text),
-      trigger_context:
-        (r.trigger_context as MobileOfflinePhraseRow['trigger_context']) || 'any',
-      animation_hint: r.animation_hint ? String(r.animation_hint) : null,
+      trigger_context: normalizePhraseTriggerContext(
+        r.trigger_context ? String(r.trigger_context) : 'any',
+      ),
+      animation_hint: normalizePhraseAnimationHint(
+        r.animation_hint ? String(r.animation_hint) : null,
+      ),
       is_builtin: Boolean(r.is_builtin),
       active: Boolean(r.active),
       created_at: String(r.created_at),
@@ -1621,7 +2317,7 @@ export class MobileSqliteEngine {
 
   createOfflinePhrase(input: {
     phraseText: string;
-    triggerContext?: MobileOfflinePhraseRow['trigger_context'];
+    triggerContext?: CanonicalPhraseTriggerContext | 'evening_reflection' | string | null;
     animationHint?: string | null;
   }): MobileOfflinePhraseRow {
     const text = input.phraseText.trim();
@@ -1630,8 +2326,11 @@ export class MobileSqliteEngine {
     }
     const nowIso = new Date().toISOString();
     const id = generateUuidV7();
-    const triggerContext = input.triggerContext ?? 'any';
-    const animationHint = input.animationHint ?? 'grimoire';
+    const triggerContext = normalizePhraseTriggerContext(input.triggerContext ?? 'any');
+    const animationHint =
+      input.animationHint === undefined
+        ? 'grimoire'
+        : normalizePhraseAnimationHint(input.animationHint);
 
     const row: MobileOfflinePhraseRow = {
       id,
@@ -1811,39 +2510,63 @@ export class MobileSqliteEngine {
   }
 
   getOutboxMutations(): MobileSyncOutboxRow[] {
-    const rows = this.queryAll(`SELECT * FROM sync_outbox ORDER BY created_at ASC`);
-    const mapped: MobileSyncOutboxRow[] = rows.map((r) => ({
-      mutation_id: String(r.mutation_id),
-      entity_table: r.entity_table as SyncEntityTable,
-      entity_id: String(r.entity_id),
-      op: (r.op as 'upsert' | 'delete') || 'upsert',
-      payload: parseJsonSafe<Record<string, unknown>>(r.payload_json, {}),
-      client_updated_at: String(r.client_updated_at),
-      retry_count: Number(r.retry_count ?? 0),
-      last_error: r.last_error ? String(r.last_error) : null,
-      created_at: String(r.created_at),
+    const rows = this.queryAll(`SELECT rowid AS _seq, * FROM sync_outbox ORDER BY rowid ASC`);
+    const withSeq = rows.map((r) => ({
+      _seq: Number(r._seq ?? 0),
+      row: {
+        mutation_id: String(r.mutation_id),
+        entity_table: r.entity_table as SyncEntityTable,
+        entity_id: String(r.entity_id),
+        op: (r.op as 'upsert' | 'delete') || 'upsert',
+        payload: parseJsonSafe<Record<string, unknown>>(r.payload_json, {}),
+        client_updated_at: String(r.client_updated_at),
+        retry_count: Number(r.retry_count ?? 0),
+        last_error: r.last_error ? String(r.last_error) : null,
+        created_at: String(r.created_at),
+      } satisfies MobileSyncOutboxRow,
     }));
 
-    return mapped.sort((a, b) => {
-      const pa = TABLE_TOPOLOGICAL_PRIORITY[a.entity_table] ?? 99;
-      const pb = TABLE_TOPOLOGICAL_PRIORITY[b.entity_table] ?? 99;
+    withSeq.sort((a, b) => {
+      const pa = TABLE_TOPOLOGICAL_PRIORITY[a.row.entity_table] ?? 99;
+      const pb = TABLE_TOPOLOGICAL_PRIORITY[b.row.entity_table] ?? 99;
       if (pa !== pb) return pa - pb;
-      return a.created_at.localeCompare(b.created_at);
+      if (a.row.entity_table === 'tasks' && b.row.entity_table === 'tasks') {
+        if (a.row.payload.parent_task_id === b.row.entity_id) return 1;
+        if (b.row.payload.parent_task_id === a.row.entity_id) return -1;
+      }
+      return a._seq - b._seq;
     });
+
+    return withSeq.map((entry) => entry.row);
   }
 
   acknowledgeOutboxMutations(mutationIds: string[], serverSeq?: number): void {
     if (mutationIds.length > 0) {
+      const syncedSet = this.readSyncedEntitiesSet();
       for (const id of mutationIds) {
+        const existing = this.queryOne(
+          `SELECT entity_table, entity_id, op FROM sync_outbox WHERE mutation_id = ?`,
+          [id],
+        );
+        if (existing) {
+          const key = `${String(existing.entity_table)}:${String(existing.entity_id)}`;
+          if (String(existing.op) === 'delete') {
+            syncedSet.delete(key);
+          } else {
+            syncedSet.add(key);
+          }
+        }
         this.db.run(`DELETE FROM sync_outbox WHERE mutation_id = ?`, [id]);
       }
+      this.writeSyncedEntitiesSet(syncedSet);
     }
     if (serverSeq !== undefined && Number.isFinite(serverSeq)) {
       const current = this.getUplinkConfig();
       const nextSeq = Math.max(current.last_server_seq, serverSeq);
+      const nowIso = new Date().toISOString();
       this.db.run(
         `UPDATE uplink_config SET last_server_seq = ?, last_sync_at = ?, updated_at = ? WHERE id = 1`,
-        [nextSeq, new Date().toISOString(), new Date().toISOString()],
+        [nextSeq, nowIso, nowIso],
       );
     }
     this.persistSnapshot();
@@ -1861,14 +2584,27 @@ export class MobileSqliteEngine {
 
   /**
    * Applies server delta changes (`GET /api/sync/pull?since=`) across all 8 synced tables
-   * using deterministic `updated_at` Last-Write-Wins (LWW) and tombstone deletion without
-   * queuing duplicate `sync_outbox` mutations.
+   * using deterministic epoch-aware `updated_at` Last-Write-Wins (LWW) and tombstone deletion
+   * without queuing duplicate `sync_outbox` mutations.
    */
   applyPulledChanges(changes: SyncPullChangeEntry[], latestServerSeq: number): number {
     let appliedCount = 0;
     const unpushedOutbox = this.getOutboxMutations();
+    const syncedSet = this.readSyncedEntitiesSet();
 
-    for (const change of changes) {
+    // Order distinct tables topologically while preserving chronological order per entity
+    const indexedChanges = changes.map((change, idx) => ({ change, idx }));
+    indexedChanges.sort((a, b) => {
+      const tableA = a.change.entity_table as SyncEntityTable;
+      const tableB = b.change.entity_table as SyncEntityTable;
+      if (tableA === tableB) return a.idx - b.idx;
+      const pa = TABLE_TOPOLOGICAL_PRIORITY[tableA] ?? 99;
+      const pb = TABLE_TOPOLOGICAL_PRIORITY[tableB] ?? 99;
+      if (pa !== pb) return pa - pb;
+      return a.idx - b.idx;
+    });
+
+    for (const { change } of indexedChanges) {
       const table = change.entity_table as SyncEntityTable;
       if (!ALLOWED_SYNC_TABLES.includes(table)) {
         continue;
@@ -1880,18 +2616,25 @@ export class MobileSqliteEngine {
       ).trim();
       if (!entityId) continue;
 
+      const isDeleteOp = change.op === 'delete' || Boolean(payload.deleted_at);
+      if (isDeleteOp) {
+        syncedSet.delete(`${table}:${entityId}`);
+      } else {
+        syncedSet.add(`${table}:${entityId}`);
+      }
+
       const incomingTs = String(
         payload.updated_at ?? change.changed_at ?? new Date().toISOString(),
       );
 
-      // Check if there is a newer unpushed local mutation in sync_outbox
-      const NewerPendingOutbox = unpushedOutbox.find(
+      // Check if there is a newer unpushed local mutation in sync_outbox (epoch-aware RFC 3339 LWW)
+      const newerPendingOutbox = unpushedOutbox.find(
         (m) =>
           m.entity_table === table &&
           m.entity_id === entityId &&
-          m.client_updated_at > incomingTs,
+          compareIsoTimestamps(m.client_updated_at, incomingTs) > 0,
       );
-      if (NewerPendingOutbox) {
+      if (newerPendingOutbox) {
         continue;
       }
 
@@ -1900,11 +2643,14 @@ export class MobileSqliteEngine {
         `SELECT updated_at FROM ${table} WHERE ${pkCol} = ?`,
         [entityId],
       );
-      if (existingRow?.updated_at && String(existingRow.updated_at) > incomingTs) {
+      if (
+        existingRow?.updated_at &&
+        compareIsoTimestamps(String(existingRow.updated_at), incomingTs) > 0
+      ) {
         continue;
       }
 
-      if (change.op === 'delete' || payload.deleted_at) {
+      if (isDeleteOp) {
         const delTs = String(payload.deleted_at ?? incomingTs);
         this.db.run(
           `UPDATE ${table} SET deleted_at = ?, updated_at = ? WHERE ${pkCol} = ?`,
@@ -1943,6 +2689,11 @@ export class MobileSqliteEngine {
           break;
         }
         case 'tasks': {
+          const rawProjectId = payload.project_id ? String(payload.project_id) : null;
+          const safeProjectId =
+            rawProjectId && this.queryOne(`SELECT id FROM projects WHERE id = ?`, [rawProjectId])
+              ? rawProjectId
+              : null;
           const tagsJson = Array.isArray(payload.tags)
             ? JSON.stringify(payload.tags)
             : typeof payload.tags === 'string'
@@ -1981,7 +2732,7 @@ export class MobileSqliteEngine {
               String(payload.description_md ?? ''),
               String(payload.status ?? 'todo'),
               String(payload.priority ?? 'medium'),
-              payload.project_id ? String(payload.project_id) : null,
+              safeProjectId,
               payload.goal_id ? String(payload.goal_id) : null,
               payload.course_id ? String(payload.course_id) : null,
               payload.lesson_id ? String(payload.lesson_id) : null,
@@ -2007,6 +2758,11 @@ export class MobileSqliteEngine {
           break;
         }
         case 'time_sessions': {
+          const rawTaskId = payload.task_id ? String(payload.task_id) : null;
+          const safeTaskId =
+            rawTaskId && this.queryOne(`SELECT id FROM tasks WHERE id = ?`, [rawTaskId])
+              ? rawTaskId
+              : null;
           this.db.run(
             `INSERT INTO time_sessions (
               id, task_id, course_id, lesson_id, category, timer_mode, work_minutes, break_minutes,
@@ -2020,7 +2776,7 @@ export class MobileSqliteEngine {
               deleted_at = NULL`,
             [
               entityId,
-              payload.task_id ? String(payload.task_id) : null,
+              safeTaskId,
               payload.course_id ? String(payload.course_id) : null,
               payload.lesson_id ? String(payload.lesson_id) : null,
               String(payload.category ?? 'deep_work'),
@@ -2073,7 +2829,9 @@ export class MobileSqliteEngine {
         }
         case 'routine_items': {
           const routineId = String(payload.routine_id ?? '');
-          if (!routineId) break;
+          if (!routineId || !this.queryOne(`SELECT id FROM routines WHERE id = ?`, [routineId])) {
+            break;
+          }
           const freqJson =
             typeof payload.frequency_config === 'object' && payload.frequency_config !== null
               ? JSON.stringify(payload.frequency_config)
@@ -2118,7 +2876,13 @@ export class MobileSqliteEngine {
         case 'routine_logs': {
           const routineItemId = String(payload.routine_item_id ?? '');
           const logDate = String(payload.log_date ?? '').slice(0, 10);
-          if (!routineItemId || !logDate) break;
+          if (
+            !routineItemId ||
+            !logDate ||
+            !this.queryOne(`SELECT id FROM routine_items WHERE id = ?`, [routineItemId])
+          ) {
+            break;
+          }
           this.db.run(
             `INSERT INTO routine_logs (
               id, routine_item_id, log_date, status, numeric_value, completed_at, notes, created_at, updated_at, deleted_at
@@ -2149,6 +2913,18 @@ export class MobileSqliteEngine {
         }
         case 'daily_checkins': {
           const logDate = String(payload.log_date ?? entityId).slice(0, 10);
+          const safeEnergy =
+            payload.energy_score !== null && payload.energy_score !== undefined
+              ? clampPulseScore(Number(payload.energy_score))
+              : null;
+          const safeMood =
+            payload.mood_score !== null && payload.mood_score !== undefined
+              ? clampPulseScore(Number(payload.mood_score))
+              : null;
+          const safeSleep =
+            payload.sleep_hours !== null && payload.sleep_hours !== undefined
+              ? clampSleepHours(Number(payload.sleep_hours))
+              : null;
           this.db.run(
             `INSERT INTO daily_checkins (
               log_date, day_profile_used, energy_score, mood_score, sleep_hours,
@@ -2166,15 +2942,9 @@ export class MobileSqliteEngine {
             [
               logDate,
               String(payload.day_profile_used ?? 'workday'),
-              payload.energy_score !== null && payload.energy_score !== undefined
-                ? Number(payload.energy_score)
-                : null,
-              payload.mood_score !== null && payload.mood_score !== undefined
-                ? Number(payload.mood_score)
-                : null,
-              payload.sleep_hours !== null && payload.sleep_hours !== undefined
-                ? Number(payload.sleep_hours)
-                : null,
+              safeEnergy,
+              safeMood,
+              safeSleep,
               String(payload.highlight ?? ''),
               String(payload.reflection_md ?? ''),
               payload.weekly_review_json ? JSON.stringify(payload.weekly_review_json) : null,
@@ -2186,6 +2956,12 @@ export class MobileSqliteEngine {
           break;
         }
         case 'companion_offline_phrases': {
+          const safeTriggerCtx = normalizePhraseTriggerContext(
+            payload.trigger_context ? String(payload.trigger_context) : 'any',
+          );
+          const safeAnimHint = normalizePhraseAnimationHint(
+            payload.animation_hint ? String(payload.animation_hint) : null,
+          );
           this.db.run(
             `INSERT INTO companion_offline_phrases (
               id, phrase_text, trigger_context, animation_hint, is_builtin, active, created_at, updated_at, deleted_at
@@ -2200,8 +2976,8 @@ export class MobileSqliteEngine {
             [
               entityId,
               String(payload.phrase_text ?? ''),
-              String(payload.trigger_context ?? 'any'),
-              payload.animation_hint ? String(payload.animation_hint) : null,
+              safeTriggerCtx,
+              safeAnimHint,
               payload.is_builtin ? 1 : 0,
               payload.active === false || payload.active === 0 ? 0 : 1,
               createdAt,
@@ -2213,6 +2989,8 @@ export class MobileSqliteEngine {
         }
       }
     }
+
+    this.writeSyncedEntitiesSet(syncedSet);
 
     const currentCfg = this.getUplinkConfig();
     const nextSeq = Math.max(currentCfg.last_server_seq, Number(latestServerSeq || 0));

@@ -1,7 +1,10 @@
+import { Network } from '@capacitor/network';
 import {
+  type CompanionAnimationHint,
   type CompanionApprovalRequest,
   type CompanionChatMessage,
   type CompanionNudge,
+  CompanionStage,
   type CompanionUndoAction,
   FUI_TOKENS,
   FuiBadge,
@@ -134,12 +137,21 @@ export function App() {
   const [lastSyncResult, setLastSyncResult] = useState<DeltaSyncResult | null>(null);
 
   const [offlineTriggerSignal, setOfflineTriggerSignal] = useState<number>(0);
+  const [fieldPhraseIndex, setFieldPhraseIndex] = useState<number>(0);
+  const [fieldAnimIndex, setFieldAnimIndex] = useState<number>(0);
+  const prevSignalRef = useRef<number>(0);
+  const simulatedOfflineRef = useRef<boolean>(false);
+  const rangeSyncInFlightRef = useRef<boolean>(false);
   const [gatewayMode, setGatewayMode] = useState<'online' | 'offline_mock'>('online');
   const [chatMessages, setChatMessages] = useState<CompanionChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [undoActions, setUndoActions] = useState<CompanionUndoAction[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<CompanionApprovalRequest[]>([]);
   const [nudges, setNudges] = useState<CompanionNudge[]>([]);
+
+  useEffect(() => {
+    simulatedOfflineRef.current = simulatedOffline;
+  }, [simulatedOffline]);
 
   const refreshStateFromSqlite = useCallback(
     (eng?: MobileSqliteEngine | null, profileOverride?: DayProfile) => {
@@ -158,6 +170,42 @@ export function App() {
     [dayProfile],
   );
 
+  const runRangeReconciliation = useCallback(
+    async (eng?: MobileSqliteEngine | null) => {
+      const target = eng ?? engineRef.current;
+      if (!target || simulatedOfflineRef.current || rangeSyncInFlightRef.current) {
+        return;
+      }
+      const cfg = target.getUplinkConfig();
+      // CRITICAL: Make ZERO HTTP requests when PAT is unconfigured or simulated offline
+      if (cfg.encrypted_pat.trim().length === 0) {
+        return;
+      }
+
+      rangeSyncInFlightRef.current = true;
+      setIsProbingOrSyncing(true);
+      try {
+        const probeRes = await probeAndVerifyUplink(target);
+        setLastProbeResult(probeRes);
+        if (probeRes.online && !simulatedOfflineRef.current) {
+          const syncRes = await runDeltaSync(target);
+          setLastSyncResult(syncRes);
+          const pat = target.getDecryptedPat();
+          const fetchedNudges = await fetchCompanionNudges({
+            activeUrl: syncRes.activeUrl || probeRes.activeUrl,
+            decryptedPat: pat,
+          });
+          setNudges(fetchedNudges);
+        }
+        refreshStateFromSqlite(target);
+      } finally {
+        rangeSyncInFlightRef.current = false;
+        setIsProbingOrSyncing(false);
+      }
+    },
+    [refreshStateFromSqlite],
+  );
+
   useEffect(() => {
     if (typeof document !== 'undefined') {
       document.title = 'HERMES Companion // MOBILE';
@@ -166,12 +214,44 @@ export function App() {
 
   useEffect(() => {
     let mounted = true;
+    let nativeListenerHandle: { remove: () => Promise<void> } | null = null;
+
     MobileSqliteEngine.create()
       .then((eng) => {
         if (!mounted) return;
         engineRef.current = eng;
         setDbReady(true);
         refreshStateFromSqlite(eng);
+
+        const cfg = eng.getUplinkConfig();
+        if (
+          cfg.encrypted_pat.trim().length > 0 &&
+          cfg.uplink_status === 'online' &&
+          !simulatedOfflineRef.current &&
+          (typeof navigator === 'undefined' || navigator.onLine !== false)
+        ) {
+          void runRangeReconciliation(eng);
+        }
+
+        if (eng.getNativePlatformInfo().isNative) {
+          void Network.addListener('networkStatusChange', (status) => {
+            if (!mounted || !engineRef.current) return;
+            if (status.connected) {
+              void runRangeReconciliation(engineRef.current);
+            } else {
+              engineRef.current.saveUplinkConfig({ uplinkStatus: 'offline' });
+              refreshStateFromSqlite(engineRef.current);
+            }
+          })
+            .then((handle) => {
+              if (!mounted) {
+                void handle.remove().catch(() => {});
+              } else {
+                nativeListenerHandle = handle;
+              }
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {
         if (!mounted) return;
@@ -183,12 +263,65 @@ export function App() {
       setExcludedRoute(resolved.excludedRoute);
       setActiveSurface(resolved.initialSurface);
     };
+
+    const handleWindowOnline = () => {
+      if (!mounted || !engineRef.current || simulatedOfflineRef.current) return;
+      const cfg = engineRef.current.getUplinkConfig();
+      if (cfg.encrypted_pat.trim().length > 0) {
+        void runRangeReconciliation(engineRef.current);
+      }
+    };
+
+    const handleWindowOffline = () => {
+      if (!mounted || !engineRef.current) return;
+      engineRef.current.saveUplinkConfig({ uplinkStatus: 'offline' });
+      refreshStateFromSqlite(engineRef.current);
+    };
+
     window.addEventListener('popstate', handlePopState);
+    window.addEventListener('online', handleWindowOnline);
+    window.addEventListener('offline', handleWindowOffline);
     return () => {
       mounted = false;
       window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('online', handleWindowOnline);
+      window.removeEventListener('offline', handleWindowOffline);
+      if (nativeListenerHandle) {
+        void nativeListenerHandle.remove().catch(() => {});
+      }
     };
-  }, [refreshStateFromSqlite]);
+  }, [refreshStateFromSqlite, runRangeReconciliation]);
+
+  useEffect(() => {
+    if (offlineTriggerSignal !== prevSignalRef.current) {
+      prevSignalRef.current = offlineTriggerSignal;
+      setFieldPhraseIndex((prev) => {
+        if (offlinePhrases.length <= 1) return 0;
+        const offset = 1 + Math.floor(Math.random() * (offlinePhrases.length - 1));
+        return (prev + offset) % offlinePhrases.length;
+      });
+      setFieldAnimIndex((prev) => prev + 1);
+    }
+  }, [offlineTriggerSignal, offlinePhrases.length]);
+
+  const fieldLedgeAnims: readonly CompanionAnimationHint[] = [
+    'idle_ledge_sit',
+    'read_grimoire',
+    'wind_blink_loop',
+    'cast_blue_flora',
+    'sip_tea',
+    'cozy_nap',
+  ];
+  const activeFieldPhrase =
+    offlinePhrases.length > 0
+      ? offlinePhrases[fieldPhraseIndex % offlinePhrases.length]
+      : undefined;
+  const activeFieldQuoteText =
+    activeFieldPhrase?.phrase_text ?? 'Consistency is the most reliable magic.';
+  const activeFieldAnim: CompanionAnimationHint =
+    (activeFieldPhrase?.animation_hint as CompanionAnimationHint | null) ??
+    fieldLedgeAnims[fieldAnimIndex % fieldLedgeAnims.length] ??
+    'idle_ledge_sit';
 
   const isOnline = !simulatedOffline && uplinkConfig.uplink_status === 'online';
   const isSyncing = isProbingOrSyncing || uplinkConfig.uplink_status === 'syncing';
@@ -665,6 +798,88 @@ export function App() {
           borderRadius: '0px',
         }}
       >
+        {(activeSurface === 'ROUTINES' || activeSurface === 'TODOS') && (
+          <div
+            data-testid="mobile-companion-motivation-strip"
+            style={{
+              marginBottom: '12px',
+              maxWidth: '100%',
+              overflow: 'hidden',
+              boxSizing: 'border-box',
+              borderRadius: '0px',
+            }}
+          >
+            <CompanionStage
+              mode="ledge"
+              data-testid="mobile-frieren-ledge"
+              scale={2}
+              ledgePositionPct={80}
+              animation={activeFieldAnim}
+              nudges={isOnline ? nudges : []}
+              onOpenChange={() => {
+                if (isOnline) {
+                  setActiveSurface('COMPANION');
+                } else {
+                  setOfflineTriggerSignal((prev) => prev + 1);
+                }
+              }}
+            />
+            <button
+              type="button"
+              data-testid="mobile-field-motivation-btn"
+              onClick={() => {
+                if (isOnline) {
+                  setActiveSurface('COMPANION');
+                } else {
+                  setOfflineTriggerSignal((prev) => prev + 1);
+                }
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: '8px 10px',
+                textAlign: 'left',
+                backgroundColor: FUI_TOKENS.bgPanel,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                borderTop: 'none',
+                color: FUI_TOKENS.inkStark,
+                fontFamily: FUI_TOKENS.fontMono,
+                fontSize: '12px',
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  color: isOnline ? FUI_TOKENS.accentPhosphor : FUI_TOKENS.accentAmber,
+                  borderRadius: '0px',
+                }}
+              >
+                {isOnline
+                  ? '[● FRIEREN // UPLINK_ACTIVE — TAP FOR LIVE CHAT]'
+                  : '[◌ FRIEREN // FIELD_MOTIVATION — TAP FOR QUOTE]'}
+              </span>
+              <span
+                data-testid="mobile-field-motivation-quote"
+                style={{
+                  fontSize: '12px',
+                  color: FUI_TOKENS.inkStark,
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                  borderRadius: '0px',
+                }}
+              >
+                {activeFieldQuoteText}
+              </span>
+            </button>
+          </div>
+        )}
+
         {activeSurface === 'ROUTINES' && (
           <RoutinesSurface
             dayProfile={dayProfile}
@@ -736,7 +951,17 @@ export function App() {
             onTestAndSaveUplink={handleTestAndSaveUplink}
             onSaveUplinkOnly={handleSaveUplinkOnly}
             onSyncNow={handleSyncNow}
-            onToggleSimulatedOffline={() => setSimulatedOffline((prev) => !prev)}
+            onToggleSimulatedOffline={() => {
+              const nextOffline = !simulatedOffline;
+              simulatedOfflineRef.current = nextOffline;
+              setSimulatedOffline(nextOffline);
+              if (!nextOffline && engineRef.current) {
+                const cfg = engineRef.current.getUplinkConfig();
+                if (cfg.encrypted_pat.trim().length > 0) {
+                  void runRangeReconciliation(engineRef.current);
+                }
+              }
+            }}
           />
         )}
       </div>

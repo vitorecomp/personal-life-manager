@@ -155,26 +155,38 @@ export async function probeAndVerifyUplink(
 }
 
 /**
- * Executes bidirectional Delta Sync:
- * 1. Drains `sync_outbox` in topological FK order via `POST /api/sync/push`
- * 2. Pulls monotonic server changes via `GET /api/sync/pull?since={last_server_seq}`
+ * Executes bidirectional Delta Sync with automatic Primary -> Fallback URL failover:
+ * 1. Tries deduplicated `[primary_server_url, fallback_server_url, active_server_url]`
+ * 2. Drains `sync_outbox` in topological FK order via `POST /api/sync/push`
+ * 3. Pulls monotonic server changes across all pages (`has_more` / `next_seq`) via `GET /api/sync/pull?since={cursor}`
  */
 export async function runDeltaSync(
   engine: MobileSqliteEngine,
   options?: {
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
+    maxPullPages?: number;
   },
 ): Promise<DeltaSyncResult> {
   const fetchImpl = options?.fetchImpl ?? globalThis.fetch;
   const timeoutMs = options?.timeoutMs ?? 4000;
+  const maxPullPages = Math.max(1, options?.maxPullPages ?? 50);
   const cfg = engine.getUplinkConfig();
   const decryptedPat = engine.getDecryptedPat();
-  const activeUrl = normalizeBaseUrl(
-    cfg.active_server_url || cfg.primary_server_url || cfg.fallback_server_url,
-  );
 
-  if (!activeUrl) {
+  const candidates: string[] = [];
+  for (const rawCandidate of [
+    cfg.primary_server_url,
+    cfg.fallback_server_url,
+    cfg.active_server_url,
+  ]) {
+    const normalized = normalizeBaseUrl(rawCandidate);
+    if (normalized && !candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  }
+
+  if (candidates.length === 0) {
     return {
       success: false,
       pushedCount: 0,
@@ -187,167 +199,209 @@ export async function runDeltaSync(
     };
   }
 
-  const headers: Record<string, string> = {
+  const pushHeaders: Record<string, string> = {
     Accept: 'application/json',
     'Content-Type': 'application/json',
   };
+  const pullHeaders: Record<string, string> = {
+    Accept: 'application/json',
+  };
   if (decryptedPat) {
-    headers.Authorization = `Bearer ${decryptedPat}`;
+    pushHeaders.Authorization = `Bearer ${decryptedPat}`;
+    pullHeaders.Authorization = `Bearer ${decryptedPat}`;
   }
 
   engine.saveUplinkConfig({ uplinkStatus: 'syncing' });
 
+  const outbox = engine.getOutboxMutations();
+  const mutationIds = outbox.map((m) => m.mutation_id);
+  let pushCompleted = outbox.length === 0;
+
   let pushedCount = 0;
   let conflictsResolved = 0;
+  let totalPulledCount = 0;
   let latestSeq = cfg.last_server_seq;
+  let lastAttemptedUrl = candidates[0]!;
+  let lastStatusCode: number | null = null;
+  let lastError: string | null = null;
 
-  // Step 1: Push pending sync_outbox mutations
-  const outbox = engine.getOutboxMutations();
-  if (outbox.length > 0) {
-    const mutationIds = outbox.map((m) => m.mutation_id);
+  for (const candidateUrl of candidates) {
+    lastAttemptedUrl = candidateUrl;
+
+    // Step 1: Push pending sync_outbox mutations (if not yet acknowledged on an earlier candidate)
+    if (!pushCompleted) {
+      try {
+        const pushRes = await fetchWithTimeout(
+          `${candidateUrl}/api/sync/push`,
+          {
+            method: 'POST',
+            headers: pushHeaders,
+            body: JSON.stringify({
+              client_id: cfg.client_id,
+              mutations: outbox.map((m) => ({
+                mutation_id: m.mutation_id,
+                entity_table: m.entity_table,
+                entity_id: m.entity_id,
+                op: m.op,
+                payload: m.payload,
+                client_updated_at: m.client_updated_at,
+              })),
+            }),
+          },
+          timeoutMs,
+          fetchImpl,
+        );
+
+        if (pushRes.status !== 200 && pushRes.status !== 201) {
+          lastStatusCode = pushRes.status;
+          lastError = `Push failed with HTTP ${pushRes.status}`;
+          if (pushRes.status >= 500) {
+            // 5xx (500, 502, 503, 504): fail over to next candidate URL if available
+            continue;
+          }
+          // 400 / 401 / 4xx: terminal client or auth error, do not fail over
+          break;
+        }
+
+        const pushBody = (await pushRes.json().catch(() => ({}))) as Record<string, unknown>;
+        pushedCount = Number(pushBody.applied_count ?? outbox.length);
+        conflictsResolved = Number(pushBody.conflicts_resolved ?? 0);
+        const pushSeq = Number(
+          pushBody.server_seq ?? pushBody.current_server_seq ?? latestSeq,
+        );
+        if (Number.isFinite(pushSeq) && pushSeq > latestSeq) {
+          latestSeq = pushSeq;
+        }
+
+        engine.acknowledgeOutboxMutations(mutationIds, latestSeq);
+        pushCompleted = true;
+      } catch (err) {
+        lastStatusCode = null;
+        lastError = err instanceof Error ? err.message : 'Network error during push';
+        continue;
+      }
+    }
+
+    // Step 2: Pull delta changes across all pages (`has_more` & `next_seq`)
+    let cursor = engine.getUplinkConfig().last_server_seq;
+    let pullRetriableError = false;
+    let pullTerminalError = false;
+
     try {
-      const pushRes = await fetchWithTimeout(
-        `${activeUrl}/api/sync/push`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            client_id: cfg.client_id,
-            mutations: outbox.map((m) => ({
-              mutation_id: m.mutation_id,
-              entity_table: m.entity_table,
-              entity_id: m.entity_id,
-              op: m.op,
-              payload: m.payload,
-              client_updated_at: m.client_updated_at,
-            })),
-          }),
-        },
-        timeoutMs,
-        fetchImpl,
-      );
+      for (let page = 0; page < maxPullPages; page += 1) {
+        const pullRes = await fetchWithTimeout(
+          `${candidateUrl}/api/sync/pull?since=${cursor}`,
+          {
+            method: 'GET',
+            headers: pullHeaders,
+          },
+          timeoutMs,
+          fetchImpl,
+        );
 
-      if (pushRes.status !== 200 && pushRes.status !== 201) {
-        const errText = `Push failed with HTTP ${pushRes.status}`;
-        engine.recordOutboxFailure(mutationIds, errText);
-        engine.saveUplinkConfig({
-          uplinkStatus: pushRes.status === 401 ? 'auth_error' : 'offline',
-        });
-        return {
-          success: false,
-          pushedCount: 0,
-          pulledCount: 0,
-          conflictsResolved: 0,
-          latestServerSeq: latestSeq,
-          activeUrl,
-          statusCode: pushRes.status,
-          error: errText,
-        };
+        if (pullRes.status !== 200) {
+          lastStatusCode = pullRes.status;
+          lastError = `Pull failed with HTTP ${pullRes.status}`;
+          if (pullRes.status >= 500) {
+            pullRetriableError = true;
+          } else {
+            pullTerminalError = true;
+          }
+          break;
+        }
+
+        const pullBody = (await pullRes.json().catch(() => ({}))) as Record<string, unknown>;
+        const changes = Array.isArray(pullBody.changes)
+          ? (pullBody.changes as SyncPullChangeEntry[])
+          : [];
+        const hasMore = Boolean(pullBody.has_more);
+        const rawNextSeq =
+          pullBody.next_seq !== undefined && pullBody.next_seq !== null
+            ? Number(pullBody.next_seq)
+            : Number.NaN;
+        const rawLatestSeq =
+          pullBody.latest_server_seq !== undefined && pullBody.latest_server_seq !== null
+            ? Number(pullBody.latest_server_seq)
+            : Number.NaN;
+
+        if (hasMore) {
+          const pageSeq = Number.isFinite(rawNextSeq) ? rawNextSeq : cursor;
+          totalPulledCount += engine.applyPulledChanges(changes, pageSeq);
+          if (!Number.isFinite(rawNextSeq) || rawNextSeq <= cursor) {
+            const fallbackSeq = Number.isFinite(rawLatestSeq) ? rawLatestSeq : pageSeq;
+            if (fallbackSeq > latestSeq) {
+              latestSeq = fallbackSeq;
+            }
+            break;
+          }
+          cursor = rawNextSeq;
+          if (cursor > latestSeq) {
+            latestSeq = cursor;
+          }
+          engine.saveUplinkConfig({ lastServerSeq: cursor });
+        } else {
+          const finalSeq = Number.isFinite(rawLatestSeq)
+            ? rawLatestSeq
+            : Number.isFinite(rawNextSeq)
+              ? rawNextSeq
+              : Math.max(latestSeq, cursor);
+          if (finalSeq > latestSeq) {
+            latestSeq = finalSeq;
+          }
+          totalPulledCount += engine.applyPulledChanges(changes, latestSeq);
+          break;
+        }
       }
-
-      const pushBody = (await pushRes.json().catch(() => ({}))) as Record<string, unknown>;
-      pushedCount = Number(pushBody.applied_count ?? outbox.length);
-      conflictsResolved = Number(pushBody.conflicts_resolved ?? 0);
-      const pushSeq = Number(
-        pushBody.server_seq ?? pushBody.current_server_seq ?? latestSeq,
-      );
-      if (Number.isFinite(pushSeq) && pushSeq > latestSeq) {
-        latestSeq = pushSeq;
-      }
-
-      engine.acknowledgeOutboxMutations(mutationIds, latestSeq);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Network error during push';
-      engine.recordOutboxFailure(mutationIds, errMsg);
-      engine.saveUplinkConfig({ uplinkStatus: 'offline' });
-      return {
-        success: false,
-        pushedCount: 0,
-        pulledCount: 0,
-        conflictsResolved: 0,
-        latestServerSeq: latestSeq,
-        activeUrl,
-        statusCode: null,
-        error: errMsg,
-      };
-    }
-  }
-
-  // Step 2: Pull delta changes since last_server_seq
-  try {
-    const pullFromSeq = engine.getUplinkConfig().last_server_seq;
-    const pullRes = await fetchWithTimeout(
-      `${activeUrl}/api/sync/pull?since=${pullFromSeq}`,
-      {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...(decryptedPat ? { Authorization: `Bearer ${decryptedPat}` } : {}),
-        },
-      },
-      timeoutMs,
-      fetchImpl,
-    );
-
-    if (pullRes.status !== 200) {
-      const errText = `Pull failed with HTTP ${pullRes.status}`;
-      engine.saveUplinkConfig({
-        uplinkStatus: pullRes.status === 401 ? 'auth_error' : 'offline',
-      });
-      return {
-        success: false,
-        pushedCount,
-        pulledCount: 0,
-        conflictsResolved,
-        latestServerSeq: latestSeq,
-        activeUrl,
-        statusCode: pullRes.status,
-        error: errText,
-      };
+      lastStatusCode = null;
+      lastError = err instanceof Error ? err.message : 'Network error during pull';
+      pullRetriableError = true;
     }
 
-    const pullBody = (await pullRes.json().catch(() => ({}))) as Record<string, unknown>;
-    const changes = Array.isArray(pullBody.changes)
-      ? (pullBody.changes as SyncPullChangeEntry[])
-      : [];
-    const pulledSeq = Number(
-      pullBody.latest_server_seq ?? pullBody.next_seq ?? latestSeq,
-    );
-    if (Number.isFinite(pulledSeq) && pulledSeq > latestSeq) {
-      latestSeq = pulledSeq;
+    if (pullRetriableError) {
+      continue;
+    }
+    if (pullTerminalError) {
+      break;
     }
 
-    const pulledCount = engine.applyPulledChanges(changes, latestSeq);
+    const nowIso = new Date().toISOString();
     engine.saveUplinkConfig({
+      activeServerUrl: candidateUrl,
       uplinkStatus: 'online',
+      lastVerifiedAt: nowIso,
       lastServerSeq: latestSeq,
-      lastSyncAt: new Date().toISOString(),
+      lastSyncAt: nowIso,
     });
 
     return {
       success: true,
       pushedCount,
-      pulledCount,
+      pulledCount: totalPulledCount,
       conflictsResolved,
       latestServerSeq: latestSeq,
-      activeUrl,
+      activeUrl: candidateUrl,
       statusCode: 200,
       error: null,
     };
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : 'Network error during pull';
-    engine.saveUplinkConfig({ uplinkStatus: 'offline' });
-    return {
-      success: false,
-      pushedCount,
-      pulledCount: 0,
-      conflictsResolved,
-      latestServerSeq: latestSeq,
-      activeUrl,
-      statusCode: null,
-      error: errMsg,
-    };
   }
+
+  // Record outbox failure at most ONCE per runDeltaSync invocation
+  if (!pushCompleted && mutationIds.length > 0) {
+    engine.recordOutboxFailure(mutationIds, lastError ?? 'Delta sync push failed');
+  }
+  engine.saveUplinkConfig({ uplinkStatus: 'offline' });
+
+  return {
+    success: false,
+    pushedCount: pushCompleted ? pushedCount : 0,
+    pulledCount: totalPulledCount,
+    conflictsResolved: pushCompleted ? conflictsResolved : 0,
+    latestServerSeq: latestSeq,
+    activeUrl: lastAttemptedUrl,
+    statusCode: lastStatusCode,
+    error: lastError ?? 'All sync endpoints unreachable',
+  };
 }
 
 export interface StreamCompanionChatCallbacks {
@@ -360,7 +414,7 @@ export interface StreamCompanionChatCallbacks {
 
 /**
  * Streams a live chat turn with Frieren (`POST /api/hermes/chat/stream`) using
- * `X-Hermes-Session-Key` and `origin: 'mobile_companion'`.
+ * `X-Hermes-Session-Key` and `origin: 'frieren_popover'`.
  */
 export async function streamCompanionChat(options: {
   activeUrl: string;
@@ -390,16 +444,18 @@ export async function streamCompanionChat(options: {
     headers.Authorization = `Bearer ${options.decryptedPat}`;
   }
 
+  const selectedEntityId = options.entityIds?.[0];
   const res = await fetchImpl(`${baseUrl}/api/hermes/chat/stream`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       session_key: options.sessionKey,
       message: options.message,
-      origin: 'mobile_companion',
+      origin: 'frieren_popover',
       page_context: {
         active_route: options.activeRoute ?? '/companion',
         entity_ids: options.entityIds ?? [],
+        ...(selectedEntityId ? { selected_entity_id: selectedEntityId } : {}),
       },
     }),
   });

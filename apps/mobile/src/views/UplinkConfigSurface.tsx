@@ -6,7 +6,7 @@ import {
   FuiPanel,
   FuiPanelHeader,
 } from '@hermes/ui';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { parsePairingQrPayload } from '../db/patCrypto';
 import type { MobileUplinkConfigRow } from '../db/sqliteEngine';
 import type { DeltaSyncResult, UplinkProbeResult } from '../services/uplinkSync';
@@ -50,6 +50,12 @@ export function UplinkConfigSurface({
   const [patInput, setPatInput] = useState<string>('');
   const [qrJsonText, setQrJsonText] = useState<string>('');
   const [qrImportStatus, setQrImportStatus] = useState<string | null>(null);
+
+  // Sync controlled URL inputs when SQLite hydrates or pulls updated server URLs (never re-populate raw PAT)
+  useEffect(() => {
+    setPrimaryUrl(config.primary_server_url);
+    setFallbackUrl(config.fallback_server_url);
+  }, [config.primary_server_url, config.fallback_server_url]);
 
   const handleTestUplinkClick = async () => {
     const tokenToSave = patInput.trim() ? patInput.trim() : undefined;

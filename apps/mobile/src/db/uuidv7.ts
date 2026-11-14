@@ -1,7 +1,7 @@
 export const RFC9562_UUIDV7_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-let lastTimestampMs = 0;
+let lastTimestampMs = -1;
 let monotonicCounter = 0;
 
 function randomBytes(length: number): Uint8Array {
@@ -18,19 +18,25 @@ function randomBytes(length: number): Uint8Array {
 
 /**
  * Generates a time-ordered RFC 9562 UUIDv7 identifier (`019...`).
- * Guarantees monotonic sub-millisecond ordering when called multiple times within the same millisecond.
+ * Guarantees strict monotonic lexicographical ordering across same-millisecond bursts
+ * (> 4,096 IDs/ms via timestamp carry) and negative clock jitter (`rawTs <= lastTimestampMs`).
  */
 export function generateUuidV7(nowMs: number = Date.now()): string {
-  const ts = Math.max(0, Math.floor(nowMs));
-  if (ts === lastTimestampMs) {
-    monotonicCounter = (monotonicCounter + 1) & 0x0fff;
+  const rawTs = Math.max(0, Math.floor(nowMs));
+  if (rawTs <= lastTimestampMs) {
+    monotonicCounter += 1;
+    if (monotonicCounter > 0x0fff) {
+      lastTimestampMs += 1;
+      monotonicCounter = 0;
+    }
   } else {
-    lastTimestampMs = ts;
+    lastTimestampMs = rawTs;
     const seed = randomBytes(2);
-    monotonicCounter = (((seed[0] ?? 0) << 8) | (seed[1] ?? 0)) & 0x0fff;
+    // 10-bit random seed leaves 3,072 increments of headroom before timestamp rollover
+    monotonicCounter = (((seed[0] ?? 0) << 8) | (seed[1] ?? 0)) & 0x03ff;
   }
 
-  const hexTs = BigInt(ts).toString(16).padStart(12, '0').slice(-12);
+  const hexTs = BigInt(lastTimestampMs).toString(16).padStart(12, '0').slice(-12);
   const randA = monotonicCounter.toString(16).padStart(3, '0').slice(-3);
 
   const randBBytes = randomBytes(8);

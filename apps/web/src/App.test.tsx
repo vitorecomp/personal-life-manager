@@ -3,7 +3,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
-import { apiPatch, parseQuickCaptureFallback, streamHermesChat } from './api/client';
+import {
+  apiPatch,
+  parseQuickCaptureFallback,
+  streamHermesChat,
+  toRfc3339DueDate,
+  UUID_RE,
+} from './api/client';
 import { WidgetRenderer } from './components/monitor/WidgetRenderer';
 import { useAppStore } from './store/appStore';
 
@@ -1178,6 +1184,367 @@ describe('HERMES // OS Web SPA — Sub-Milestone M4A (F23, F24, F27)', () => {
 
     await waitFor(() => {
       expect(document.querySelectorAll('[data-testid^="companion-msg-"]').length).toBe(0);
+    });
+  });
+
+  it('[F24/F27] guards active_dashboard_id with UUID_RE across /dashboard -> /todos navigation and skips fallback deck detail fetches', async () => {
+    const requestedUrls: string[] = [];
+    let capturedChatStreamBody: Record<string, any> | null = null;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes('/api/hermes/chat/stream') && init?.method === 'POST') {
+        capturedChatStreamBody = JSON.parse(String(init.body || '{}'));
+        return new Response(
+          'event: token\ndata: {"type":"token","delta":"Inbox triaged."}\n\n' +
+            'event: done\ndata: {"type":"done","message":"Inbox triaged."}\n\n',
+          { status: 200 },
+        );
+      }
+      if (url === '/api/dashboards') {
+        // Return empty array so FALLBACK_STARTER_DECKS ('deck-01-tactical-ops') is active on /dashboard
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    render(<App initialPath="/dashboard" />);
+    expect(screen.getByTestId('room-monitor-dashboard')).toBeTruthy();
+
+    // Non-UUID fallback deck ID must NOT be stored in Zustand or fetched via GET /api/dashboards/deck-01-tactical-ops
+    expect(UUID_RE.test('deck-01-tactical-ops')).toBe(false);
+    expect(useAppStore.getState().activeDashboardId).toBeNull();
+    expect(
+      requestedUrls.some((u) => u.includes('/api/dashboards/deck-01-tactical-ops')),
+    ).toBe(false);
+
+    // Navigate to /todos, open Cmd+J Frieren popover, and send a chat message
+    fireEvent.click(screen.getByTestId('nav-link-todos'));
+    expect(await screen.findByTestId('todos-page')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'j', ctrlKey: true });
+    expect(screen.getByTestId('companion-stage-popover')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Message Frieren'), {
+      target: { value: 'Triage my inbox' },
+    });
+    fireEvent.click(within(screen.getByTestId('companion-online-chat')).getByText('SEND'));
+
+    await waitFor(() => {
+      expect(capturedChatStreamBody).toBeTruthy();
+    });
+    expect(capturedChatStreamBody!.page_context.active_route).toBe('/todos');
+    expect(capturedChatStreamBody!.page_context.active_dashboard_id).toBeNull();
+
+    // Direct streamHermesChat call also sanitizes non-UUID active_dashboard_id to null
+    let directBody: Record<string, any> | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_input, init) => {
+      directBody = JSON.parse(String(init?.body || '{}'));
+      return new Response('event: token\ndata: hello\n\nevent: token\ndata:  \n\nevent: token\ndata: world\n\n', {
+        status: 200,
+      });
+    });
+    const plainRes = await streamHermesChat({
+      sessionKey: 's-sanitize',
+      message: 'Ping',
+      pageContext: {
+        active_route: '/dashboard',
+        active_dashboard_id: 'deck-01-tactical-ops',
+      },
+    });
+    expect(directBody!.page_context.active_dashboard_id).toBeNull();
+    expect(plainRes).toBe('hello world');
+  });
+
+  it('[F32/M4A] fetches /finance candles using asset UUID (assets[0].id) rather than ticker symbol', async () => {
+    const assetUuid = '01932a00-0000-7000-8000-000000000901';
+    const candleUrls: string[] = [];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/candles')) {
+        candleUrls.push(url);
+        return new Response(
+          JSON.stringify([
+            {
+              timestamp: '2026-11-14T00:00:00Z',
+              open_cents: 5200,
+              high_cents: 5450,
+              low_cents: 5150,
+              close_cents: 5400,
+              volume: 12000,
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/api/finance/assets')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: assetUuid,
+              symbol: 'WEGE3',
+              asset_class: 'br_equity',
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    render(<App initialPath="/finance" />);
+    expect(await screen.findByTestId('finance-page')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(candleUrls.length).toBeGreaterThan(0);
+    });
+    expect(candleUrls).toContain(`/api/finance/assets/${assetUuid}/candles`);
+    expect(candleUrls.some((u) => u.includes('/WEGE3/candles'))).toBe(false);
+    expect(document.body.textContent).toContain('WEGE3');
+  });
+
+  it('[F27] prevents stale closure in hermes-sessions-sync from hijacking explicit setActiveSessionKey and keeps repeated prompt bubbles visible during Turn 2 streaming', async () => {
+    let resolveInitialSessions!: (res: Response) => void;
+    let streamTurn2Controller!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    let chatTurnCount = 0;
+    let persistedMessages: any[] = [];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/hermes/sessions') {
+        return new Promise<Response>((resolve) => {
+          resolveInitialSessions = resolve;
+        });
+      }
+      if (url.includes('/api/hermes/sessions/explicit-user-session')) {
+        return new Response(
+          JSON.stringify({
+            session_key: 'explicit-user-session',
+            messages: persistedMessages,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/api/hermes/chat/stream') && init?.method === 'POST') {
+        chatTurnCount += 1;
+        if (chatTurnCount === 1) {
+          persistedMessages = [
+            { id: 'srv-u1', role: 'user', content: 'Ping?' },
+            { id: 'srv-a1', role: 'assistant', content: 'Pong 1!' },
+          ];
+          return new Response(
+            'event: token\ndata: {"type":"token","delta":"Pong 1!"}\n\n' +
+              'event: done\ndata: {"type":"done","message":"Pong 1!"}\n\n',
+            { status: 200 },
+          );
+        }
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamTurn2Controller = controller;
+          },
+        });
+        return new Response(stream, { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    render(<App initialPath="/todos" />);
+
+    // While initial GET /api/hermes/sessions is still in-flight, user explicitly switches session key
+    act(() => {
+      useAppStore.getState().setActiveSessionKey('explicit-user-session');
+    });
+    expect(useAppStore.getState().activeSessionKey).toBe('explicit-user-session');
+
+    // Resolve stale initial GET /api/hermes/sessions -> must NOT overwrite 'explicit-user-session'
+    await act(async () => {
+      resolveInitialSessions(
+        new Response(
+          JSON.stringify([{ session_key: 'stale-old-session', title: 'Old Session' }]),
+          { status: 200 },
+        ),
+      );
+      await Promise.resolve();
+    });
+    expect(useAppStore.getState().activeSessionKey).toBe('explicit-user-session');
+
+    // Open Cmd+J and send "Ping?" on Turn 1 -> 2 bubbles after Turn 1 refetch
+    fireEvent.keyDown(window, { key: 'j', ctrlKey: true });
+    fireEvent.change(screen.getByLabelText('Message Frieren'), {
+      target: { value: 'Ping?' },
+    });
+    fireEvent.click(within(screen.getByTestId('companion-online-chat')).getByText('SEND'));
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-testid^="companion-msg-"]').length).toBe(2);
+    });
+
+    // Send identical prompt "Ping?" on Turn 2 -> must render all 4 bubbles while Turn 2 is streaming
+    fireEvent.change(screen.getByLabelText('Message Frieren'), {
+      target: { value: 'Ping?' },
+    });
+    fireEvent.click(within(screen.getByTestId('companion-online-chat')).getByText('SEND'));
+
+    await waitFor(() => {
+      expect(streamTurn2Controller).toBeTruthy();
+      expect(document.querySelectorAll('[data-testid^="companion-msg-"]').length).toBe(4);
+    });
+
+    await act(async () => {
+      streamTurn2Controller.enqueue(
+        encoder.encode('event: token\ndata: {"type":"token","delta":"Pong 2!"}\n\n'),
+      );
+      await Promise.resolve();
+    });
+    expect(document.querySelectorAll('[data-testid^="companion-msg-"]').length).toBe(4);
+
+    // Complete Turn 2 stream and persist 4 messages -> still exactly 4 bubbles after refetch
+    persistedMessages = [
+      { id: 'srv-u1', role: 'user', content: 'Ping?' },
+      { id: 'srv-a1', role: 'assistant', content: 'Pong 1!' },
+      { id: 'srv-u2', role: 'user', content: 'Ping?' },
+      { id: 'srv-a2', role: 'assistant', content: 'Pong 2!' },
+    ];
+    await act(async () => {
+      streamTurn2Controller.enqueue(
+        encoder.encode('event: done\ndata: {"type":"done","message":"Pong 2!"}\n\n'),
+      );
+      streamTurn2Controller.close();
+    });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-testid^="companion-msg-"]').length).toBe(4);
+      expect(screen.getByTestId('companion-stage-popover').textContent).toContain('Pong 2!');
+    });
+  });
+
+  it('[F23/F24] enforces strict NLP calendar rollover, 1..=1440 minute bounds, #tag sanitization, orphan MCP approval scoping, and widget-edit source_config merge', async () => {
+    const invalidParsed = parseQuickCaptureFallback(
+      'Review 2026-02-29 2026-04-31 999999999999m ##',
+    );
+    expect(invalidParsed.scheduled_date).toBeUndefined();
+    expect(invalidParsed.due_at).toBeUndefined();
+    expect(invalidParsed.estimated_minutes).toBeUndefined();
+    expect(invalidParsed.tags).toEqual([]);
+    expect(invalidParsed.clean_title).toBe('Review 2026-02-29 2026-04-31 999999999999m ##');
+
+    expect(toRfc3339DueDate('2026-02-29')).toBeUndefined();
+    expect(toRfc3339DueDate('2026-04-31')).toBeUndefined();
+    expect(toRfc3339DueDate('2024-02-29')).toBe('2024-02-29T23:59:59Z');
+
+    const boundOk = parseQuickCaptureFallback('Max full-day sprint 1440m #rust_2024');
+    expect(boundOk.estimated_minutes).toBe(1440);
+    expect(boundOk.tags).toEqual(['rust_2024']);
+
+    const boundOver = parseQuickCaptureFallback('Over-day sprint 1441m 0m');
+    expect(boundOver.estimated_minutes).toBeUndefined();
+
+    // Verify orphan/alias pending MCP approval isolation and widget-edit source_config merge + post-PUT refresh
+    let putWidgetBody: Record<string, any> | null = null;
+    let refreshedEditedWidget = false;
+    const deckUuid = '01932a00-0000-7000-8000-000000000101';
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (
+        url.includes(`/api/dashboards/${deckUuid}/widgets/w-edit-http`) &&
+        init?.method === 'PUT'
+      ) {
+        putWidgetBody = JSON.parse(String(init.body || '{}'));
+        return new Response(JSON.stringify({ id: 'w-edit-http', ...putWidgetBody }), {
+          status: 200,
+        });
+      }
+      if (url.includes('/api/widgets/w-edit-http/refresh') && init?.method === 'POST') {
+        refreshedEditedWidget = true;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.includes('/api/dashboards')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: deckUuid,
+              slug: 'tactical-ops',
+              title: 'DECK_01 // TACTICAL_OPS',
+              cycle_seconds: 60,
+              in_rotation: true,
+              sort_order: 1,
+              layout_cols: 12,
+              layout_rows: 8,
+              widgets: [
+                {
+                  id: 'w-edit-http',
+                  dashboard_id: deckUuid,
+                  title: 'HTTP_WITH_POINTER',
+                  source_kind: 'http',
+                  renderer_kind: 'kpi',
+                  grid_rect: { x: 0, y: 0, w: 4, h: 3 },
+                  source_config: {
+                    url: 'http://127.0.0.1:8080/api/health',
+                    json_pointer: '/status',
+                    headers: { 'X-Probe': '1' },
+                  },
+                  last_refreshed_at: '2026-11-14T10:00:00Z',
+                  cached_payload: { status: 200, extracted: 'ok' },
+                },
+              ],
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/api/mcp/approvals')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'orphan-approval',
+              tool_name: 'dashboards_configure_command_widget',
+              status: 'pending',
+              payload_json: {
+                dashboard_id: '01932a00-dead-7000-8000-000000009999',
+                title: 'ORPHAN_CMD',
+                command: 'echo ORPHAN_LEAK',
+              },
+            },
+            {
+              id: 'alias-approval',
+              tool_name: 'dashboards_configure_command_widget',
+              status: 'pending',
+              payload_json: {
+                id: '01932a00-0000-7000-8000-000000000102',
+                title: 'ALIAS_CMD',
+                command: 'echo ALIAS_LEAK',
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    render(<App initialPath="/dashboard" />);
+    expect(await screen.findByTestId('widget-card-w-edit-http')).toBeTruthy();
+
+    // Neither orphan nor id-aliased approval for another deck leaks onto DECK_01
+    expect(document.body.textContent).not.toContain('ORPHAN_LEAK');
+    expect(document.body.textContent).not.toContain('ALIAS_LEAK');
+
+    // Edit widget renderer_kind -> preserves json_pointer & headers and triggers post-PUT refresh
+    fireEvent.click(screen.getByTestId('edit-widget-w-edit-http'));
+    fireEvent.click(screen.getByTestId('widget-submit-btn'));
+
+    await waitFor(() => {
+      expect(putWidgetBody).toBeTruthy();
+      expect(refreshedEditedWidget).toBe(true);
+    });
+    expect(putWidgetBody!.source_config).toEqual({
+      url: 'http://127.0.0.1:8080/api/health',
+      json_pointer: '/status',
+      headers: { 'X-Probe': '1' },
     });
   });
 });

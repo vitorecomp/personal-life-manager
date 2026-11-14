@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { FuiBadge, FuiButton, FuiPanelHeader, FUI_TOKENS } from '@hermes/ui';
 import {
   apiPost,
+  isValidIsoCalendarDate,
   normalizeTaskEnergyLevel,
   parseQuickCaptureFallback,
   toRfc3339DueDate,
@@ -140,7 +141,19 @@ export function QuickCaptureModal() {
         ),
       );
       const validEnergy = normalizeTaskEnergyLevel(resolved.energy_level);
-      const rfcDue = toRfc3339DueDate(resolved.due_at ?? resolved.scheduled_date);
+      const validScheduledDate =
+        resolved.scheduled_date && isValidIsoCalendarDate(String(resolved.scheduled_date).trim())
+          ? String(resolved.scheduled_date).trim()
+          : undefined;
+      const rfcDue = toRfc3339DueDate(resolved.due_at ?? validScheduledDate);
+      const rawEst = resolved.estimated_minutes ?? resolved.estimate_minutes;
+      const validEstimatedMinutes =
+        typeof rawEst === 'number' &&
+        Number.isSafeInteger(rawEst) &&
+        rawEst >= 1 &&
+        rawEst <= 1440
+          ? rawEst
+          : undefined;
 
       await apiPost('/api/tasks', {
         title: finalTitle,
@@ -148,10 +161,10 @@ export function QuickCaptureModal() {
         tags: uniqueTags,
         priority: resolved.priority ?? 'medium',
         energy_level: validEnergy,
-        scheduled_date: resolved.scheduled_date,
+        scheduled_date: validScheduledDate,
         due_date: rfcDue,
         due_at: rfcDue,
-        estimated_minutes: resolved.estimated_minutes ?? resolved.estimate_minutes,
+        estimated_minutes: validEstimatedMinutes,
         status: resolved.status ?? 'todo',
       });
 

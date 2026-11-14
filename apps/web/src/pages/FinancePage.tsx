@@ -18,6 +18,7 @@ import {
   formatFireDuration,
   formatUsdCents,
   unwrapList,
+  UUID_RE,
   type AllocationRecord,
   type FireProjectionRecord,
   type MonthlyPlanRecord,
@@ -98,15 +99,17 @@ export function FinancePage() {
     },
   });
 
+  const rawAssetId = String(assets[0]?.id || '').trim();
+  const primaryAssetId = UUID_RE.test(rawAssetId) ? rawAssetId : '';
   const primarySymbol = String(assets[0]?.symbol || '').trim();
 
   const { data: candleData = [] } = useQuery({
-    queryKey: ['finance-candles', primarySymbol],
+    queryKey: ['finance-candles', primaryAssetId],
     queryFn: async () => {
-      if (!primarySymbol) return [];
+      if (!primaryAssetId) return [];
       try {
         const res = await apiGet<any>(
-          `/api/finance/assets/${encodeURIComponent(primarySymbol)}/candles`,
+          `/api/finance/assets/${encodeURIComponent(primaryAssetId)}/candles`,
         );
         const rawCandles = unwrapList<any>(res, ['candles']);
         return rawCandles.map(
@@ -123,7 +126,7 @@ export function FinancePage() {
         return [];
       }
     },
-    enabled: Boolean(primarySymbol),
+    enabled: Boolean(primaryAssetId),
   });
 
   const totalBrlCents = Number(
@@ -240,7 +243,7 @@ export function FinancePage() {
             }}
           >
             <PairedHatchBarChart data={monthlyBarData} />
-            <CandlestickChart symbol={primarySymbol || 'PORTFOLIO'} candles={candleData} />
+            <CandlestickChart symbol={primarySymbol || 'NO_ASSETS'} candles={candleData} />
           </div>
         </div>
       </FuiPanel>

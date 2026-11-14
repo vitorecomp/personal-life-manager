@@ -86,7 +86,7 @@ export function HermesPage() {
           message: trimmed,
           origin: 'hermes_view',
           highLevelMode: highLevelPlan,
-          pageContext: { active_route: '/hermes' },
+          pageContext: { active_route: '/hermes', active_dashboard_id: null },
         },
         {
           onToken: (delta) => {

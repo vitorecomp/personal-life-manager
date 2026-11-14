@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CompanionStage,
@@ -13,6 +13,7 @@ import {
   apiPost,
   streamHermesChat,
   unwrapList,
+  UUID_RE,
   type CompanionNudgeRecord,
   type HermesSessionRecord,
   type McpUndoRecord,
@@ -30,6 +31,7 @@ export interface FrierenCompanionControllerProps {
 
 interface ScopedCompanionMessage extends CompanionChatMessage {
   sessionKey: string;
+  isOptimisticTurn?: boolean;
 }
 
 export function FrierenCompanionController({
@@ -52,6 +54,7 @@ export function FrierenCompanionController({
 
   const [localMessages, setLocalMessages] = useState<ScopedCompanionMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const optimisticSeqRef = useRef(0);
 
   // Clear local optimistic messages immediately when activeSessionKey changes
   useEffect(() => {
@@ -79,7 +82,16 @@ export function FrierenCompanionController({
         const res = await apiGet<any>('/api/hermes/sessions');
         const list = unwrapList<HermesSessionRecord>(res, ['sessions']);
         if (list.length > 0 && list[0]?.session_key) {
-          if (activeSessionKey === 'hermes-primary-session') {
+          const cur = useAppStore.getState();
+          const storedExplicit =
+            typeof window !== 'undefined'
+              ? window.localStorage.getItem('hermes-active-session-key')
+              : null;
+          if (
+            cur.activeSessionKey === 'hermes-primary-session' &&
+            !cur.isAssistantStreaming &&
+            !storedExplicit
+          ) {
             setActiveSessionKey(list[0].session_key);
           }
         }
@@ -240,7 +252,7 @@ export function FrierenCompanionController({
   const scopedLocalMessages = localMessages
     .filter((m) => m.sessionKey === activeSessionKey)
     .filter((m) => {
-      if (m.isStreaming) return true;
+      if (m.isStreaming || m.isOptimisticTurn) return true;
       return !serverMessages.some(
         (srv) => srv.role === m.role && srv.content.trim() === m.content.trim(),
       );
@@ -249,9 +261,16 @@ export function FrierenCompanionController({
   const combinedMessages: CompanionChatMessage[] =
     scopedLocalMessages.length > 0 ? [...serverMessages, ...scopedLocalMessages] : serverMessages;
 
+  const isDashboardRoute =
+    pathname === '/dashboard' || pathname.startsWith('/dashboard/') || pathname === '/monitor';
+  const safeActiveDashboardId =
+    isDashboardRoute && activeDashboardId && UUID_RE.test(activeDashboardId)
+      ? activeDashboardId
+      : null;
+
   const pageContext = {
     activeRoute: pathname,
-    activeDashboardId,
+    activeDashboardId: safeActiveDashboardId,
     selectedEntityId,
     selectedEntityLabel,
   };
@@ -285,13 +304,25 @@ export function FrierenCompanionController({
 
   const handleSendMessage = async (text: string) => {
     const targetSessionKey = activeSessionKey;
+    const prevPersistedRecord = queryClient.getQueryData<HermesSessionRecord | null>([
+      'hermes-session',
+      targetSessionKey,
+    ]);
+    const prevPersistedList =
+      prevPersistedRecord?.messages ?? prevPersistedRecord?.messages_json ?? [];
+    const prevPersistedCount = Array.isArray(prevPersistedList) ? prevPersistedList.length : 0;
+    const prevLastPersistedId =
+      prevPersistedCount > 0 ? prevPersistedList[prevPersistedCount - 1]?.id : undefined;
+
+    const seq = ++optimisticSeqRef.current;
     const userMsg: ScopedCompanionMessage = {
-      id: `usr-${Date.now()}`,
+      id: `usr-${Date.now()}-${seq}`,
       sessionKey: targetSessionKey,
       role: 'user',
       content: text,
+      isOptimisticTurn: true,
     };
-    const asstId = `asst-${Date.now() + 1}`;
+    const asstId = `asst-${Date.now()}-${seq}`;
     setLocalMessages((prev) => [
       ...prev.filter((m) => m.sessionKey === targetSessionKey),
       userMsg,
@@ -301,6 +332,7 @@ export function FrierenCompanionController({
         role: 'assistant',
         content: '...',
         isStreaming: true,
+        isOptimisticTurn: true,
       },
     ]);
     setIsStreaming(true);
@@ -316,7 +348,7 @@ export function FrierenCompanionController({
           origin: 'frieren_popover',
           pageContext: {
             active_route: pathname,
-            active_dashboard_id: activeDashboardId,
+            active_dashboard_id: safeActiveDashboardId,
             selected_entity_id: selectedEntityId,
           },
         },
@@ -364,7 +396,9 @@ export function FrierenCompanionController({
         targetSessionKey,
       ]);
       const persisted = refreshed?.messages ?? refreshed?.messages_json ?? [];
-      if (Array.isArray(persisted) && persisted.length > 0) {
+      const nextCount = Array.isArray(persisted) ? persisted.length : 0;
+      const nextLastId = nextCount > 0 ? persisted[nextCount - 1]?.id : undefined;
+      if (nextCount > prevPersistedCount || (nextCount > 0 && nextLastId !== prevLastPersistedId)) {
         setLocalMessages((prev) => prev.filter((m) => m.sessionKey !== targetSessionKey));
       }
 

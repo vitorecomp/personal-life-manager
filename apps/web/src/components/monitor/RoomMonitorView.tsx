@@ -21,6 +21,7 @@ import {
   formatFireDuration,
   formatUsdCents,
   unwrapList,
+  UUID_RE,
   type AgentRecord,
   type AllocationRecord,
   type CourseRecord,
@@ -292,15 +293,13 @@ export function RoomMonitorView({
   }, [kioskMode, rotationDecks, cycleState.rotationIndex, selectedDeckId, decks]);
 
   useEffect(() => {
-    if (activeDeck?.id) {
-      setActiveDashboardId(activeDeck.id);
-    }
+    setActiveDashboardId(activeDeck?.id && UUID_RE.test(activeDeck.id) ? activeDeck.id : null);
   }, [activeDeck?.id, setActiveDashboardId]);
 
   const { data: activeDeckDetail } = useQuery({
     queryKey: ['dashboards', activeDeck?.id],
     queryFn: async () => {
-      if (!activeDeck?.id) return null;
+      if (!activeDeck?.id || !UUID_RE.test(activeDeck.id)) return null;
       try {
         const res = await apiGet<any>(`/api/dashboards/${encodeURIComponent(activeDeck.id)}`);
         if (Array.isArray(res)) {
@@ -314,7 +313,7 @@ export function RoomMonitorView({
         return null;
       }
     },
-    enabled: Boolean(activeDeck?.id),
+    enabled: Boolean(activeDeck?.id && UUID_RE.test(activeDeck.id)),
   });
 
   const { data: lifeScore } = useQuery({
@@ -789,6 +788,21 @@ export function RoomMonitorView({
     },
   });
 
+  const activeWidgets: DashboardWidgetRecord[] = useMemo(() => {
+    const detailWidgets =
+      activeDeckDetail && !Array.isArray(activeDeckDetail)
+        ? activeDeckDetail.widgets
+        : undefined;
+    const fromDetail = unwrapList<DashboardWidgetRecord>(detailWidgets, ['widgets']).filter(
+      (w): w is DashboardWidgetRecord => Boolean(w && typeof w === 'object'),
+    );
+    if (fromDetail.length > 0) return fromDetail;
+    const fromList = unwrapList<DashboardWidgetRecord>(activeDeck?.widgets, ['widgets']).filter(
+      (w): w is DashboardWidgetRecord => Boolean(w && typeof w === 'object'),
+    );
+    return fromList;
+  }, [activeDeckDetail, activeDeck]);
+
   const saveWidgetMutation = useMutation({
     mutationFn: async (e: React.FormEvent) => {
       e.preventDefault();
@@ -811,16 +825,30 @@ export function RoomMonitorView({
         grid_rect.y = Math.max(0, 8 - grid_rect.h);
       }
 
-      const source_config =
+      const editingWidget = editingWidgetId
+        ? activeWidgets.find((w) => w.id === editingWidgetId)
+        : undefined;
+      const commandTimeoutMs =
+        editingWidget?.source_kind === 'command' &&
+        typeof editingWidget.source_config?.timeout_ms === 'number'
+          ? editingWidget.source_config.timeout_ms
+          : 5000;
+
+      const updatedConfig =
         widgetSourceKind === 'sql'
           ? { query: widgetQueryOrConfig }
           : widgetSourceKind === 'http'
-            ? { url: widgetQueryOrConfig }
+             ? { url: widgetQueryOrConfig }
             : widgetSourceKind === 'command'
-              ? { command: widgetQueryOrConfig, timeout_ms: 5000 }
+              ? { command: widgetQueryOrConfig, timeout_ms: commandTimeoutMs }
               : widgetSourceKind === 'hermes'
                 ? { prompt: widgetQueryOrConfig }
                 : { builtin_key: widgetQueryOrConfig || 'life_score' };
+
+      const source_config: Record<string, any> =
+        editingWidget && editingWidget.source_kind === widgetSourceKind
+          ? { ...(editingWidget.source_config ?? {}), ...updatedConfig }
+          : updatedConfig;
 
       if (editingWidgetId) {
         const updated = await apiPut<any>(
@@ -833,6 +861,13 @@ export function RoomMonitorView({
             source_config,
           },
         );
+        const isUnapprovedCommand =
+          widgetSourceKind === 'command' && source_config?.approved === false;
+        if (!isUnapprovedCommand) {
+          await apiPost(`/api/widgets/${encodeURIComponent(editingWidgetId)}/refresh`, {}).catch(
+            () => null,
+          );
+        }
         return updated;
       }
 
@@ -874,21 +909,6 @@ export function RoomMonitorView({
       );
     },
   });
-
-  const activeWidgets: DashboardWidgetRecord[] = useMemo(() => {
-    const detailWidgets =
-      activeDeckDetail && !Array.isArray(activeDeckDetail)
-        ? activeDeckDetail.widgets
-        : undefined;
-    const fromDetail = unwrapList<DashboardWidgetRecord>(detailWidgets, ['widgets']).filter(
-      (w): w is DashboardWidgetRecord => Boolean(w && typeof w === 'object'),
-    );
-    if (fromDetail.length > 0) return fromDetail;
-    const fromList = unwrapList<DashboardWidgetRecord>(activeDeck?.widgets, ['widgets']).filter(
-      (w): w is DashboardWidgetRecord => Boolean(w && typeof w === 'object'),
-    );
-    return fromList;
-  }, [activeDeckDetail, activeDeck]);
 
   // Auto-refresh unpopulated seeded/backend widgets at most once per widget ID
   useEffect(() => {
@@ -985,18 +1005,24 @@ export function RoomMonitorView({
       if (!tool.startsWith('dashboards_') && !tool.includes('command_widget')) return false;
 
       const pj = a.payload_json && typeof a.payload_json === 'object' ? a.payload_json : {};
-      const targetDashId = pj.dashboard_id ? String(pj.dashboard_id) : '';
-      if (targetDashId) {
-        const dashExistsInList = decks.some(
-          (d) => String(d.id) === targetDashId || String(d.slug) === targetDashId,
-        );
+      const rawTarget = pj.dashboard_id ?? pj.id ?? pj.id_or_slug;
+      const targetDashId = rawTarget != null ? String(rawTarget).trim() : '';
+
+      if (rawDecks.length === 0) {
         if (
-          dashExistsInList &&
-          String(activeDeck.id) !== targetDashId &&
-          String(activeDeck.slug) !== targetDashId
+          !targetDashId ||
+          (String(activeDeck.id) !== targetDashId && String(activeDeck.slug) !== targetDashId)
         ) {
           return false;
         }
+      }
+
+      if (
+        targetDashId &&
+        String(activeDeck.id) !== targetDashId &&
+        String(activeDeck.slug) !== targetDashId
+      ) {
+        return false;
       }
 
       // Skip if already rendered inline inside an unapproved widget card on this deck
@@ -1008,7 +1034,7 @@ export function RoomMonitorView({
       );
       return !alreadyRenderedInline;
     });
-  }, [pendingApprovals, decks, activeDeck.id, activeDeck.slug, activeWidgets]);
+  }, [pendingApprovals, rawDecks.length, activeDeck.id, activeDeck.slug, activeWidgets]);
 
   const isWealthDeck = /wealth|fire/i.test(`${activeDeck.slug} ${activeDeck.title}`);
   const isInfraDeck = /infra|server|knight/i.test(`${activeDeck.slug} ${activeDeck.title}`);

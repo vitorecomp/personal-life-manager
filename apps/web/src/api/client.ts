@@ -1,3 +1,5 @@
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface HealthResponse {
   status: string;
   db_online: boolean;
@@ -63,11 +65,11 @@ export interface QuickCaptureParsed {
   clean_title: string;
   title?: string;
   tags: string[];
-  energy_level: string | null;
-  priority: string | null;
-  scheduled_date: string | null;
-  due_at: string | null;
-  estimated_minutes: number | null;
+  energy_level?: string | null;
+  priority?: string | null;
+  scheduled_date?: string | null;
+  due_at?: string | null;
+  estimated_minutes?: number | null;
   estimate_minutes?: number | null;
   status?: string;
   project_hint?: string | null;
@@ -498,13 +500,26 @@ export function normalizeTaskEnergyLevel(
   return null;
 }
 
-export function toRfc3339DueDate(raw: string | null | undefined): string | null {
-  if (!raw) return null;
+export function isValidIsoCalendarDate(iso: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  const d = new Date(`${iso}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === iso;
+}
+
+export function toRfc3339DueDate(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
   const trimmed = String(raw).trim();
-  if (!trimmed) return null;
+  if (!trimmed) return undefined;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    if (!isValidIsoCalendarDate(trimmed)) return undefined;
     return `${trimmed}T23:59:59Z`;
   }
+  const datePrefix = trimmed.match(/^(\d{4}-\d{2}-\d{2})T/);
+  if (datePrefix && !isValidIsoCalendarDate(datePrefix[1]!)) {
+    return undefined;
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return undefined;
   return trimmed;
 }
 
@@ -518,8 +533,8 @@ export function parseQuickCaptureFallback(rawInput: string): QuickCaptureParsed 
   const tags: string[] = [];
   let energy_level: 'deep' | 'shallow' | 'quick' | null = null;
   let priority: 'urgent' | 'high' | 'medium' | 'low' | null = null;
-  let scheduled_date: string | null = null;
-  let estimated_minutes: number | null = null;
+  let scheduled_date: string | undefined = undefined;
+  let estimated_minutes: number | undefined = undefined;
   let project_hint: string | null = null;
 
   let workingInput = rawInput.trim();
@@ -527,12 +542,13 @@ export function parseQuickCaptureFallback(rawInput: string): QuickCaptureParsed 
   // Extract multi-word relative date phrases before tokenizing
   workingInput = workingInput.replace(
     /\bin\s+(\d+)\s+days?\b[,;.]*/gi,
-    (_match, daysStr: string) => {
+    (match, daysStr: string) => {
       const days = Number.parseInt(daysStr, 10);
-      if (Number.isFinite(days) && days >= 0) {
+      if (Number.isSafeInteger(days) && days >= 0 && days <= 36500) {
         scheduled_date = addDaysIsoDate(days);
+        return ' ';
       }
-      return ' ';
+      return match;
     },
   );
 
@@ -553,13 +569,22 @@ export function parseQuickCaptureFallback(rawInput: string): QuickCaptureParsed 
     const lower = stripped.toLowerCase();
 
     if (stripped.startsWith('#') && stripped.length > 1) {
-      const tag = lower.slice(1);
-      if (tag && !tags.includes(tag)) {
-        tags.push(tag);
+      const tag = lower.slice(1).replace(/[^a-z0-9_-]/g, '');
+      if (tag) {
+        if (!tags.includes(tag)) {
+          tags.push(tag);
+        }
+        if (!project_hint) project_hint = tag;
+      } else {
+        titleWords.push(rawTok);
       }
-      if (tag && !project_hint) project_hint = tag;
     } else if (stripped.startsWith('+') && stripped.length > 1) {
-      project_hint = lower.slice(1);
+      const proj = lower.slice(1).replace(/[^a-z0-9_-]/g, '');
+      if (proj) {
+        project_hint = proj;
+      } else {
+        titleWords.push(rawTok);
+      }
     } else if (stripped.startsWith('@') && stripped.length > 1) {
       const e = lower.slice(1);
       if (e.startsWith('deep')) {
@@ -596,26 +621,54 @@ export function parseQuickCaptureFallback(rawInput: string): QuickCaptureParsed 
       scheduled_date = addDaysIsoDate(1);
     } else if (/^(?:due:)?(\d{4}-\d{2}-\d{2})$/i.test(stripped)) {
       const iso = lower.replace(/^due:/, '');
-      const parsedMs = Date.parse(`${iso}T00:00:00Z`);
-      if (!Number.isNaN(parsedMs)) {
+      const d = new Date(`${iso}T00:00:00Z`);
+      const isValidCalendarDate = !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === iso;
+      if (isValidCalendarDate) {
         scheduled_date = iso;
       } else {
         titleWords.push(rawTok);
       }
     } else if (/^~?(\d+)h(\d+)(?:m|min|mins)?$/i.test(stripped)) {
       const m = stripped.match(/^~?(\d+)h(\d+)(?:m|min|mins)?$/i);
-      if (m) {
-        estimated_minutes = Number.parseInt(m[1]!, 10) * 60 + Number.parseInt(m[2]!, 10);
+      const h = m ? Number.parseInt(m[1]!, 10) : Number.NaN;
+      const minsPart = m ? Number.parseInt(m[2]!, 10) : Number.NaN;
+      const mins = h * 60 + minsPart;
+      if (
+        Number.isSafeInteger(h) &&
+        Number.isSafeInteger(minsPart) &&
+        h >= 0 &&
+        minsPart >= 0 &&
+        Number.isSafeInteger(mins) &&
+        mins >= 1 &&
+        mins <= 1440
+      ) {
+        estimated_minutes = mins;
+      } else {
+        titleWords.push(rawTok);
       }
     } else if (/^~?(\d+)(?:m|min|mins)$/i.test(stripped)) {
       const m = stripped.match(/^~?(\d+)(?:m|min|mins)$/i);
-      if (m) {
-        estimated_minutes = Number.parseInt(m[1]!, 10);
+      const mins = m ? Number.parseInt(m[1]!, 10) : Number.NaN;
+      if (Number.isSafeInteger(mins) && mins >= 1 && mins <= 1440) {
+        estimated_minutes = mins;
+      } else {
+        titleWords.push(rawTok);
       }
     } else if (/^~?(\d+(?:\.\d+)?)(?:h|hr|hrs)$/i.test(stripped)) {
       const m = stripped.match(/^~?(\d+(?:\.\d+)?)(?:h|hr|hrs)$/i);
-      if (m) {
-        estimated_minutes = Math.round(Number.parseFloat(m[1]!) * 60);
+      const hours = m ? Number.parseFloat(m[1]!) : Number.NaN;
+      const mins = Math.round(hours * 60);
+      if (
+        Number.isFinite(hours) &&
+        hours > 0 &&
+        hours <= 24 &&
+        Number.isSafeInteger(mins) &&
+        mins >= 1 &&
+        mins <= 1440
+      ) {
+        estimated_minutes = mins;
+      } else {
+        titleWords.push(rawTok);
       }
     } else {
       titleWords.push(rawTok);
@@ -623,7 +676,7 @@ export function parseQuickCaptureFallback(rawInput: string): QuickCaptureParsed 
   }
 
   const clean_title = titleWords.join(' ').trim() || rawInput.trim();
-  const due_at = scheduled_date ? `${scheduled_date}T23:59:59Z` : null;
+  const due_at = scheduled_date ? `${scheduled_date}T23:59:59Z` : undefined;
   return {
     clean_title,
     title: clean_title,
@@ -669,6 +722,17 @@ export async function streamHermesChat(
     return fallback;
   }
 
+  const sanitizedPageContext = params.pageContext
+    ? {
+        ...params.pageContext,
+        active_dashboard_id:
+          params.pageContext.active_dashboard_id &&
+          UUID_RE.test(String(params.pageContext.active_dashboard_id))
+            ? String(params.pageContext.active_dashboard_id)
+            : null,
+      }
+    : undefined;
+
   const response = await globalThis.fetch('/api/hermes/chat/stream', {
     method: 'POST',
     headers: {
@@ -680,7 +744,7 @@ export async function streamHermesChat(
       message: params.message,
       origin: params.origin ?? 'frieren_popover',
       high_level_mode: params.highLevelMode ?? false,
-      page_context: params.pageContext,
+      page_context: sanitizedPageContext,
     }),
   });
 
@@ -712,16 +776,21 @@ export async function streamHermesChat(
     const afterColon = line.slice(5);
     const dataPayload = afterColon.startsWith(' ') ? afterColon.slice(1) : afterColon;
     const trimmed = dataPayload.trim();
-    if (!trimmed || trimmed === '[DONE]') return;
+    if (dataPayload.length === 0 || trimmed === '[DONE]') return;
 
     let parsed: any = null;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
+    if (trimmed.length > 0) {
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        parsed = { token: dataPayload };
+      }
+    } else {
       parsed = { token: dataPayload };
     }
 
     const evType = String(parsed?.type || currentEvent || 'message').toLowerCase();
+    if (!trimmed && evType !== 'token') return;
 
     if (evType === 'thinking') {
       callbacks.onThinking?.(

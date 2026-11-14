@@ -1418,52 +1418,66 @@ fn read_youtube_playlists_readonly(
     )
     .map_err(|e| ApiError::internal(format!("Failed to open YouTube SQLite DB read-only: {e}")))?;
 
-    if !sqlite_has_table(&conn, "playlist") {
+    let playlist_table = if sqlite_has_table(&conn, "playlist") {
+        "playlist"
+    } else if sqlite_has_table(&conn, "playlists") {
+        "playlists"
+    } else {
         return Ok(Vec::new());
-    }
+    };
 
-    let has_video = sqlite_has_table(&conn, "video");
+    let video_table = if sqlite_has_table(&conn, "video") {
+        Some("video")
+    } else if sqlite_has_table(&conn, "videos") {
+        Some("videos")
+    } else {
+        None
+    };
     let has_ai_note = sqlite_has_table(&conn, "ai_note");
 
-    let sql = if has_video && has_ai_note {
-        r#"
-        SELECT
-            p.playlist_id,
-            p.title,
-            COUNT(v.video_id) AS video_count,
-            COUNT(a.video_id) AS distilled_count
-        FROM playlist p
-        LEFT JOIN video v ON v.playlist_id = p.playlist_id
-        LEFT JOIN ai_note a ON a.video_id = v.video_id
-        GROUP BY p.playlist_id, p.title
-        ORDER BY p.title ASC
-        "#
-    } else if has_video {
-        r#"
-        SELECT
-            p.playlist_id,
-            p.title,
-            COUNT(v.video_id) AS video_count,
-            0 AS distilled_count
-        FROM playlist p
-        LEFT JOIN video v ON v.playlist_id = p.playlist_id
-        GROUP BY p.playlist_id, p.title
-        ORDER BY p.title ASC
-        "#
-    } else {
-        r#"
-        SELECT
-            p.playlist_id,
-            p.title,
-            0 AS video_count,
-            0 AS distilled_count
-        FROM playlist p
-        ORDER BY p.title ASC
-        "#
+    let sql = match (video_table, has_ai_note) {
+        (Some(vt), true) => format!(
+            r#"
+            SELECT
+                p.playlist_id,
+                p.title,
+                COUNT(v.video_id) AS video_count,
+                COUNT(a.video_id) AS distilled_count
+            FROM {playlist_table} p
+            LEFT JOIN {vt} v ON v.playlist_id = p.playlist_id
+            LEFT JOIN ai_note a ON a.video_id = v.video_id
+            GROUP BY p.playlist_id, p.title
+            ORDER BY p.title ASC
+            "#
+        ),
+        (Some(vt), false) => format!(
+            r#"
+            SELECT
+                p.playlist_id,
+                p.title,
+                COUNT(v.video_id) AS video_count,
+                0 AS distilled_count
+            FROM {playlist_table} p
+            LEFT JOIN {vt} v ON v.playlist_id = p.playlist_id
+            GROUP BY p.playlist_id, p.title
+            ORDER BY p.title ASC
+            "#
+        ),
+        (None, _) => format!(
+            r#"
+            SELECT
+                p.playlist_id,
+                p.title,
+                0 AS video_count,
+                0 AS distilled_count
+            FROM {playlist_table} p
+            ORDER BY p.title ASC
+            "#
+        ),
     };
 
     let mut stmt = conn
-        .prepare(sql)
+        .prepare(&sql)
         .map_err(|e| ApiError::internal(format!("Failed to prepare playlist query: {e}")))?;
     let rows = stmt
         .query_map([], |row| {
@@ -1499,33 +1513,48 @@ fn extract_playlist_from_sqlite_readonly(
     )
     .map_err(|e| ApiError::internal(format!("Failed to open YouTube SQLite DB read-only: {e}")))?;
 
-    if !sqlite_has_table(&conn, "playlist") {
+    let playlist_table = if sqlite_has_table(&conn, "playlist") {
+        "playlist"
+    } else if sqlite_has_table(&conn, "playlists") {
+        "playlists"
+    } else {
         return Err(ApiError::not_found(format!(
             "Playlist {playlist_id} not found (missing playlist table)"
         )));
-    }
+    };
 
     let (title, folder): (String, Option<String>) = conn
         .query_row(
-            "SELECT title, folder FROM playlist WHERE playlist_id = ?1",
+            &format!("SELECT title, folder FROM {playlist_table} WHERE playlist_id = ?1"),
             [playlist_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
+        .or_else(|_| {
+            conn.query_row(
+                &format!("SELECT title, NULL FROM {playlist_table} WHERE playlist_id = ?1"),
+                [playlist_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        })
         .map_err(|_| ApiError::not_found(format!("YouTube playlist {playlist_id} not found")))?;
 
-    if !sqlite_has_table(&conn, "video") {
+    let video_table = if sqlite_has_table(&conn, "video") {
+        "video"
+    } else if sqlite_has_table(&conn, "videos") {
+        "videos"
+    } else {
         return Ok(ExtractedYoutubePlaylist {
             title,
             folder,
             videos: Vec::new(),
         });
-    }
+    };
 
     let has_detail = sqlite_has_table(&conn, "video_detail");
     let has_ai_note = sqlite_has_table(&conn, "ai_note");
 
     let sql = match (has_detail, has_ai_note) {
-        (true, true) => {
+        (true, true) => format!(
             r#"
             SELECT
                 v.video_id,
@@ -1537,14 +1566,14 @@ fn extract_playlist_from_sqlite_readonly(
                 d.note_file,
                 a.output_text,
                 a.output_file
-            FROM video v
+            FROM {video_table} v
             LEFT JOIN video_detail d ON d.video_id = v.video_id
             LEFT JOIN ai_note a ON a.video_id = v.video_id
             WHERE v.playlist_id = ?1
             ORDER BY v.position ASC, v.rowid ASC
             "#
-        }
-        (true, false) => {
+        ),
+        (true, false) => format!(
             r#"
             SELECT
                 v.video_id,
@@ -1556,13 +1585,13 @@ fn extract_playlist_from_sqlite_readonly(
                 d.note_file,
                 NULL AS output_text,
                 NULL AS output_file
-            FROM video v
+            FROM {video_table} v
             LEFT JOIN video_detail d ON d.video_id = v.video_id
             WHERE v.playlist_id = ?1
             ORDER BY v.position ASC, v.rowid ASC
             "#
-        }
-        (false, _) => {
+        ),
+        (false, _) => format!(
             r#"
             SELECT
                 v.video_id,
@@ -1574,15 +1603,15 @@ fn extract_playlist_from_sqlite_readonly(
                 NULL AS note_file,
                 NULL AS output_text,
                 NULL AS output_file
-            FROM video v
+            FROM {video_table} v
             WHERE v.playlist_id = ?1
             ORDER BY v.position ASC, v.rowid ASC
             "#
-        }
+        ),
     };
 
     let mut stmt = conn
-        .prepare(sql)
+        .prepare(&sql)
         .map_err(|e| ApiError::internal(format!("Failed to prepare video query: {e}")))?;
 
     let rows = stmt

@@ -137,7 +137,6 @@ impl Drop for TestDb {
             return;
         }
         self.dropped = true;
-        let pool = self.pool.clone();
         let admin_opts = self.admin_opts.clone();
         let db_name = self.db_name.clone();
         let temp_dir = self.temp_dir.clone();
@@ -147,7 +146,6 @@ impl Drop for TestDb {
                 .build()
             {
                 rt.block_on(async move {
-                    pool.close().await;
                     TestDb::drop_database(&admin_opts, &db_name).await;
                 });
             }

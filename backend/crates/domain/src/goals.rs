@@ -26,9 +26,13 @@ impl Default for CycleStatus {
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum GoalPillar {
+    #[serde(alias = "career_craft", alias = "craft")]
     Career,
+    #[serde(alias = "health_vitality")]
     Health,
+    #[serde(alias = "learning_mastery")]
     Learning,
+    #[serde(alias = "wealth_finance", alias = "wealth")]
     Finance,
     Personal,
     PersonalProject,
@@ -164,7 +168,7 @@ pub struct Goal {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateGoalRequest {
-    #[serde(default = "default_cycle_year")]
+    #[serde(default = "default_cycle_year", alias = "cycle_year")]
     pub year: i32,
     pub pillar: GoalPillar,
     pub code: Option<String>,
@@ -175,6 +179,7 @@ pub struct CreateGoalRequest {
     pub status: GoalStatus,
     pub priority_rank: Option<i32>,
     pub target_date: Option<NaiveDate>,
+    #[serde(alias = "confidence")]
     pub confidence_score: Option<i16>,
     pub blueprint_pos: Option<BlueprintPos>,
 }
@@ -294,12 +299,17 @@ impl GoalKeyResult {
     }
 }
 
+fn default_kr_metric_type() -> KrMetricType {
+    KrMetricType::Numeric
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateKeyResultRequest {
     #[serde(default)]
     pub quarter: OkrQuarter,
     pub code: Option<String>,
     pub title: String,
+    #[serde(default = "default_kr_metric_type")]
     pub metric_type: KrMetricType,
     #[serde(default)]
     pub start_value: Decimal,

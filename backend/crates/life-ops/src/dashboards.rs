@@ -720,6 +720,18 @@ impl LifeOpsService {
         Ok(())
     }
 
+    /// Resolve the parent `dashboard_id` for a given `widget_id` (`404 Not Found` if absent).
+    pub async fn find_widget_dashboard_id(&self, widget_id: Uuid) -> Result<Uuid, ApiError> {
+        let dashboard_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT dashboard_id FROM dashboard_widgets WHERE id = $1",
+        )
+        .bind(widget_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        dashboard_id.ok_or_else(|| ApiError::not_found(format!("Widget '{widget_id}' not found")))
+    }
+
     /// Compute the 5-pillar composite Life Score (`0.0..=100.0`, equal default weights `0.20 × 5`,
     /// returning neutral `50.0` for any pillar with zero underlying records and zero `NaN`s).
     pub async fn compute_life_score(&self) -> Result<LifeScoreResponse, ApiError> {

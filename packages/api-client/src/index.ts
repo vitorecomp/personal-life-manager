@@ -1,4 +1,9 @@
 import { v7 as uuidv7 } from 'uuid';
+import { client } from './generated/client.gen';
+
+export * from './generated';
+export { client } from './generated/client.gen';
+export * from './generated/@tanstack/react-query.gen';
 
 export interface HealthStatusResponse {
   status: string;
@@ -21,6 +26,14 @@ export function createApiHeaders(config?: Partial<ApiClientConfig>): Record<stri
     headers.Authorization = `Bearer ${config.bearerToken}`;
   }
   return headers;
+}
+
+export function configureApiClient(config: ApiClientConfig) {
+  client.setConfig({
+    baseUrl: config.baseUrl,
+    headers: createApiHeaders(config),
+  });
+  return client;
 }
 
 export function createMutationId(): string {

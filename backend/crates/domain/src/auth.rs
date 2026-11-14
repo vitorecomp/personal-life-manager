@@ -95,6 +95,7 @@ fn default_pat_scopes() -> Vec<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreatePatRequest {
+    #[serde(alias = "label", alias = "title")]
     pub name: String,
     #[serde(default = "default_pat_scopes")]
     pub scopes: Vec<String>,
@@ -112,8 +113,10 @@ pub struct CreatedPatResponse {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct PairingQrRequest {
+    #[serde(alias = "server_url", alias = "base_url", alias = "url")]
     pub primary_url: Option<String>,
     pub fallback_url: Option<String>,
+    #[serde(alias = "name", alias = "label")]
     pub token_name: Option<String>,
 }
 

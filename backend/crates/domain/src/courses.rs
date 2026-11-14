@@ -54,6 +54,7 @@ pub enum LessonStatus {
     Todo,
     InProgress,
     Distilled,
+    #[serde(alias = "done")]
     Completed,
 }
 
@@ -66,7 +67,7 @@ impl Default for LessonStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpacedReviewAction {
-    #[serde(alias = "good", alias = "easy", alias = "pass")]
+    #[serde(alias = "advance", alias = "good", alias = "easy", alias = "pass")]
     Complete,
     #[serde(alias = "postpone")]
     Snooze,
@@ -256,6 +257,7 @@ pub struct CourseSyllabusResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct ImportOutlineRequest {
+    #[serde(alias = "outline_md", alias = "outline", alias = "markdown")]
     pub outline_text: String,
 }
 
@@ -276,8 +278,10 @@ pub struct YoutubePlaylistsResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct ImportYoutubePlaylistRequest {
+    #[serde(alias = "youtube_playlist_id")]
     pub playlist_id: String,
     pub goal_id: Option<Uuid>,
+    #[serde(alias = "course_title", alias = "title")]
     pub title_override: Option<String>,
 }
 

@@ -592,6 +592,14 @@ async fn apply_task_mutation(
         other => other,
     });
 
+    let normalized_priority = json_str(&mutation.payload, "priority").map(|p| match p {
+        "p1" | "critical" => "urgent",
+        "p2" | "important" => "high",
+        "p3" | "med" | "normal" => "medium",
+        "p4" => "low",
+        other => other,
+    });
+
     if let Some(existing_ts) = existing {
         if client_ts < existing_ts {
             return Ok(MutationOutcome::ConflictServerNewer);
@@ -649,7 +657,7 @@ async fn apply_task_mutation(
         .bind(json_str(&mutation.payload, "title"))
         .bind(json_str(&mutation.payload, "description_md"))
         .bind(status)
-        .bind(json_str(&mutation.payload, "priority"))
+        .bind(normalized_priority)
         .bind(json_uuid(&mutation.payload, "project_id"))
         .bind(json_uuid(&mutation.payload, "goal_id"))
         .bind(json_uuid(&mutation.payload, "course_id"))
@@ -694,7 +702,7 @@ async fn apply_task_mutation(
     let title = json_str(&mutation.payload, "title").unwrap_or("Untitled Task");
     let description_md = json_str(&mutation.payload, "description_md").unwrap_or("");
     let status = json_str(&mutation.payload, "status").unwrap_or("inbox");
-    let priority = json_str(&mutation.payload, "priority").unwrap_or("medium");
+    let priority = normalized_priority.unwrap_or("medium");
     let completed_at = if status == "done" {
         Some(json_datetime(&mutation.payload, "completed_at").unwrap_or(client_ts))
     } else {

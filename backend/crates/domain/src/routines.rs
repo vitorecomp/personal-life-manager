@@ -28,9 +28,11 @@ impl Default for RoutineTimeSlot {
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum DayProfile {
+    #[serde(alias = "weekday")]
     Workday,
     Weekend,
     Travel,
+    #[serde(alias = "mvd", alias = "minimum_viable_day")]
     MinimumViable,
     All,
 }
@@ -76,6 +78,7 @@ impl Default for HabitFrequencyType {
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum RoutineLogStatus {
+    #[serde(alias = "done")]
     Completed,
     Partial,
     Skipped,
@@ -185,7 +188,9 @@ pub struct RoutineLog {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct LogRoutineItemRequest {
+    #[serde(alias = "item_id", alias = "habit_id")]
     pub routine_item_id: Uuid,
+    #[serde(alias = "date")]
     pub log_date: Option<NaiveDate>,
     pub status: RoutineLogStatus,
     pub numeric_value: Option<Decimal>,
@@ -216,11 +221,14 @@ pub struct DailyCheckin {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpsertDailyCheckinRequest {
+    #[serde(alias = "day_profile", alias = "profile")]
     pub day_profile_used: Option<DayProfile>,
     pub energy_score: Option<i16>,
     pub mood_score: Option<i16>,
     pub sleep_hours: Option<Decimal>,
+    #[serde(alias = "highlights_md", alias = "highlights")]
     pub highlight: Option<String>,
+    #[serde(alias = "notes_md", alias = "blockers_md", alias = "blocker")]
     pub reflection_md: Option<String>,
     pub weekly_review_json: Option<serde_json::Value>,
 }

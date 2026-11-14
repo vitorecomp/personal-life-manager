@@ -71,6 +71,7 @@ impl Default for KnightGridPos {
 #[serde(rename_all = "snake_case")]
 pub enum AgentTriggerType {
     Cron,
+    #[serde(alias = "sse_event", alias = "domain_event", alias = "system_event")]
     Event,
     Webhook,
 }
@@ -137,12 +138,14 @@ fn default_true() -> bool {
 pub struct CreateAgentRequest {
     pub slug: Option<String>,
     pub name: String,
+    #[serde(alias = "archetype")]
     pub knight_archetype: KnightArchetype,
     #[serde(default = "default_crest_color")]
     pub crest_color: String,
     pub sprite_sheet_id: Option<String>,
     #[serde(default)]
     pub grid_pos: KnightGridPos,
+    #[serde(alias = "profile_slug", alias = "profile")]
     pub hermes_profile: Option<String>,
     pub system_prompt: String,
     #[serde(default)]
@@ -161,10 +164,12 @@ pub struct CreateAgentRequest {
 pub struct UpdateAgentRequest {
     pub slug: Option<String>,
     pub name: Option<String>,
+    #[serde(alias = "archetype")]
     pub knight_archetype: Option<KnightArchetype>,
     pub crest_color: Option<String>,
     pub sprite_sheet_id: Option<String>,
     pub grid_pos: Option<KnightGridPos>,
+    #[serde(alias = "profile_slug", alias = "profile")]
     pub hermes_profile: Option<String>,
     pub system_prompt: Option<String>,
     pub model_config: Option<serde_json::Value>,
@@ -179,7 +184,7 @@ pub struct AgentTrigger {
     pub id: Uuid,
     pub agent_id: Uuid,
     #[sqlx(rename = "type")]
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "trigger_type")]
     pub trigger_type: AgentTriggerType,
     pub config_json: serde_json::Value,
     pub enabled: bool,
@@ -191,7 +196,7 @@ pub struct AgentTrigger {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateAgentTriggerRequest {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "trigger_type")]
     pub trigger_type: AgentTriggerType,
     #[serde(default)]
     pub config_json: serde_json::Value,
@@ -202,7 +207,7 @@ pub struct CreateAgentTriggerRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdateAgentTriggerRequest {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "trigger_type")]
     pub trigger_type: Option<AgentTriggerType>,
     pub config_json: Option<serde_json::Value>,
     pub enabled: Option<bool>,
@@ -229,6 +234,7 @@ pub struct AgentRun {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct DispatchAgentRequest {
     pub dry_run: Option<bool>,
+    #[serde(alias = "input", alias = "prompt")]
     pub sample_input: Option<String>,
     #[serde(default)]
     pub trigger_id: Option<Uuid>,

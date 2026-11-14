@@ -101,6 +101,7 @@ fn default_true() -> bool {
 pub struct CreatePortfolioAssetRequest {
     #[serde(default)]
     pub id: Option<Uuid>,
+    #[serde(alias = "ticker")]
     pub symbol: String,
     pub name: String,
     pub asset_class: AssetClass,
@@ -112,18 +113,18 @@ pub struct CreatePortfolioAssetRequest {
     pub is_watchlist: Option<bool>,
     #[serde(default)]
     pub quantity: Decimal,
-    #[serde(default)]
+    #[serde(default, alias = "average_cost_cents", alias = "cost_basis_cents")]
     pub avg_cost_cents: i64,
     #[serde(default, alias = "last_price_cents")]
     pub current_price_cents: i64,
     #[serde(default)]
     pub previous_close_cents: Option<i64>,
     pub dividend_yield_pct: Option<Decimal>,
-    #[serde(default)]
+    #[serde(default, alias = "target_pct")]
     pub target_weight_pct: Decimal,
-    #[serde(alias = "alert_below_cents")]
+    #[serde(alias = "alert_below_cents", alias = "price_alert_low_cents", alias = "min_price_cents")]
     pub alert_low_cents: Option<i64>,
-    #[serde(alias = "alert_above_cents")]
+    #[serde(alias = "alert_above_cents", alias = "price_alert_high_cents", alias = "max_price_cents")]
     pub alert_high_cents: Option<i64>,
     #[serde(default)]
     pub thesis_md: String,
@@ -131,6 +132,7 @@ pub struct CreatePortfolioAssetRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdatePortfolioAssetRequest {
+    #[serde(alias = "ticker")]
     pub symbol: Option<String>,
     pub name: Option<String>,
     pub asset_class: Option<AssetClass>,
@@ -138,15 +140,17 @@ pub struct UpdatePortfolioAssetRequest {
     pub in_portfolio: Option<bool>,
     pub is_watchlist: Option<bool>,
     pub quantity: Option<Decimal>,
+    #[serde(alias = "average_cost_cents", alias = "cost_basis_cents")]
     pub avg_cost_cents: Option<i64>,
     #[serde(alias = "last_price_cents")]
     pub current_price_cents: Option<i64>,
     pub previous_close_cents: Option<i64>,
     pub dividend_yield_pct: Option<Decimal>,
+    #[serde(alias = "target_pct")]
     pub target_weight_pct: Option<Decimal>,
-    #[serde(alias = "alert_below_cents")]
+    #[serde(alias = "alert_below_cents", alias = "price_alert_low_cents", alias = "min_price_cents")]
     pub alert_low_cents: Option<i64>,
-    #[serde(alias = "alert_above_cents")]
+    #[serde(alias = "alert_above_cents", alias = "price_alert_high_cents", alias = "max_price_cents")]
     pub alert_high_cents: Option<i64>,
     pub thesis_md: Option<String>,
 }
@@ -291,7 +295,9 @@ pub struct RetirementConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdateRetirementConfigRequest {
+    #[serde(alias = "real_return_pct", alias = "annual_return_pct")]
     pub expected_real_return_pct: Option<Decimal>,
+    #[serde(alias = "swr_pct")]
     pub safe_withdrawal_rate_pct: Option<Decimal>,
     pub override_retirement_monthly_spend_cents: Option<i64>,
     pub macro_class_targets_json: Option<serde_json::Value>,
@@ -334,7 +340,9 @@ pub struct FireSimulationRequest {
     pub monthly_contribution_brl_cents: Option<i64>,
     #[serde(alias = "monthly_spend_cents")]
     pub monthly_retirement_spend_brl_cents: Option<i64>,
+    #[serde(alias = "real_return_pct", alias = "annual_return_pct")]
     pub expected_real_return_pct: Option<Decimal>,
+    #[serde(alias = "swr_pct")]
     pub safe_withdrawal_rate_pct: Option<Decimal>,
     #[serde(default)]
     pub current_age: Option<i16>,

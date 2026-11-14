@@ -60,12 +60,14 @@ fn default_ssh_port() -> i32 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateServerRequest {
+    #[serde(alias = "title", alias = "label")]
     pub name: String,
     pub host: String,
     #[serde(default = "default_ssh_port")]
     pub port: i32,
-    #[serde(default)]
+    #[serde(default, alias = "probe_type", alias = "protocol")]
     pub check_type: ServerCheckType,
+    #[serde(alias = "url", alias = "endpoint")]
     pub http_url: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -73,10 +75,13 @@ pub struct CreateServerRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdateServerRequest {
+    #[serde(alias = "title", alias = "label")]
     pub name: Option<String>,
     pub host: Option<String>,
     pub port: Option<i32>,
+    #[serde(alias = "probe_type", alias = "protocol")]
     pub check_type: Option<ServerCheckType>,
+    #[serde(alias = "url", alias = "endpoint")]
     pub http_url: Option<String>,
     pub tags: Option<Vec<String>>,
 }

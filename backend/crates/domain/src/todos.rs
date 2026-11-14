@@ -65,9 +65,13 @@ impl Default for TaskStatus {
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
+    #[serde(alias = "p3")]
     Low,
+    #[serde(alias = "p2")]
     Medium,
+    #[serde(alias = "p1")]
     High,
+    #[serde(alias = "p0", alias = "critical")]
     Urgent,
 }
 
@@ -204,7 +208,7 @@ pub struct CreateTaskRequest {
     pub title: String,
     #[serde(default)]
     pub quick_capture: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "description")]
     pub description_md: String,
     #[serde(default)]
     pub status: TaskStatus,
@@ -215,14 +219,15 @@ pub struct CreateTaskRequest {
     pub course_id: Option<Uuid>,
     pub lesson_id: Option<Uuid>,
     pub parent_task_id: Option<Uuid>,
-    #[serde(default)]
+    #[serde(default, alias = "depends_on", alias = "dependency_ids", alias = "dependencies", alias = "blocked_by")]
     pub blocked_by_task_ids: Vec<Uuid>,
     pub vault_note_path: Option<String>,
     pub scheduled_date: Option<NaiveDate>,
     #[serde(alias = "due_at")]
     pub due_date: Option<DateTime<Utc>>,
-    #[serde(alias = "estimate_minutes")]
+    #[serde(alias = "estimate_minutes", alias = "duration_mins")]
     pub estimated_minutes: Option<i32>,
+    #[serde(alias = "energy")]
     pub energy_level: Option<TaskEnergyLevel>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -233,6 +238,7 @@ pub struct CreateTaskRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdateTaskRequest {
     pub title: Option<String>,
+    #[serde(alias = "description")]
     pub description_md: Option<String>,
     pub status: Option<TaskStatus>,
     pub priority: Option<TaskPriority>,
@@ -241,14 +247,16 @@ pub struct UpdateTaskRequest {
     pub course_id: Option<Uuid>,
     pub lesson_id: Option<Uuid>,
     pub parent_task_id: Option<Uuid>,
+    #[serde(alias = "depends_on", alias = "dependency_ids", alias = "dependencies", alias = "blocked_by")]
     pub blocked_by_task_ids: Option<Vec<Uuid>>,
     pub vault_note_path: Option<String>,
     pub scheduled_date: Option<NaiveDate>,
     #[serde(alias = "due_at")]
     pub due_date: Option<DateTime<Utc>>,
-    #[serde(alias = "estimate_minutes")]
+    #[serde(alias = "estimate_minutes", alias = "duration_mins")]
     pub estimated_minutes: Option<i32>,
     pub actual_seconds: Option<i64>,
+    #[serde(alias = "energy")]
     pub energy_level: Option<TaskEnergyLevel>,
     pub tags: Option<Vec<String>>,
     pub recurrence_rule: Option<String>,
@@ -278,6 +286,7 @@ pub struct TaskListFilter {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct BulkUpdateTasksRequest {
+    #[serde(alias = "ids")]
     pub task_ids: Vec<Uuid>,
     pub status: Option<TaskStatus>,
     pub priority: Option<TaskPriority>,
@@ -351,7 +360,7 @@ pub struct StartTimerRequest {
     pub lesson_id: Option<Uuid>,
     #[serde(default)]
     pub category: TimeCategory,
-    #[serde(default)]
+    #[serde(default, alias = "mode")]
     pub timer_mode: TimerMode,
     pub work_minutes: Option<i32>,
     pub break_minutes: Option<i32>,
@@ -368,7 +377,7 @@ pub struct StopTimerRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct QuickCaptureParseRequest {
-    #[serde(alias = "input", alias = "text", alias = "query")]
+    #[serde(alias = "raw", alias = "input", alias = "text", alias = "query")]
     pub raw_input: String,
 }
 

@@ -348,10 +348,14 @@ impl LifeOpsService {
         id: Uuid,
         range_key: &str,
     ) -> Result<AssetCandlesResponse, ApiError> {
-        let normalized_range = if range_key.trim().is_empty() {
-            "1M".to_string()
-        } else {
-            range_key.trim().to_ascii_uppercase()
+        let raw_upper = range_key.trim().to_ascii_uppercase();
+        let normalized_range = match raw_upper.as_str() {
+            "" | "30D" | "1MO" | "MONTH" => "1M".to_string(),
+            "24H" | "DAY" => "1D".to_string(),
+            "1W" | "WEEK" => "7D".to_string(),
+            "365D" | "12M" | "YEAR" => "1Y".to_string(),
+            "MAX" => "ALL".to_string(),
+            other => other.to_string(),
         };
         if !matches!(
             normalized_range.as_str(),

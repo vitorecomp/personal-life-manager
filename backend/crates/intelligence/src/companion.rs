@@ -302,6 +302,82 @@ impl IntelligenceService {
         Ok(created)
     }
 
+    pub async fn update_companion_phrase(
+        &self,
+        id: Uuid,
+        req: serde_json::Value,
+    ) -> Result<CompanionOfflinePhrase, ApiError> {
+        let existing = sqlx::query_as::<_, CompanionOfflinePhrase>(
+            "SELECT * FROM companion_offline_phrases WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| {
+            ApiError::not_found(format!("Companion offline phrase '{id}' not found"))
+        })?;
+
+        let phrase_text = req
+            .get("phrase_text")
+            .or_else(|| req.get("text"))
+            .or_else(|| req.get("phrase"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or(&existing.phrase_text)
+            .to_string();
+        if phrase_text.is_empty() {
+            return Err(ApiError::bad_request("phrase_text must not be empty"));
+        }
+
+        let trigger_context = req
+            .get("trigger_context")
+            .or_else(|| req.get("category"))
+            .and_then(|v| serde_json::from_value::<TriggerContext>(v.clone()).ok())
+            .unwrap_or(existing.trigger_context);
+
+        let animation_hint = if let Some(val) = req.get("animation_hint") {
+            if val.is_null() {
+                None
+            } else {
+                serde_json::from_value::<hermes_domain::CompanionAnimationHint>(val.clone())
+                    .ok()
+                    .or(existing.animation_hint)
+            }
+        } else {
+            existing.animation_hint
+        };
+
+        let active = req
+            .get("active")
+            .or_else(|| req.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(existing.active);
+
+        let updated = sqlx::query_as::<_, CompanionOfflinePhrase>(
+            r#"
+            UPDATE companion_offline_phrases
+            SET phrase_text = $2,
+                trigger_context = $3,
+                animation_hint = $4,
+                active = $5,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            "#,
+        )
+        .bind(id)
+        .bind(&phrase_text)
+        .bind(trigger_context)
+        .bind(animation_hint)
+        .bind(active)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(ApiError::from)?;
+
+        Ok(updated)
+    }
+
     pub async fn delete_companion_phrase(&self, id: Uuid) -> Result<(), ApiError> {
         let res = sqlx::query(
             r#"

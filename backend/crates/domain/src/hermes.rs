@@ -56,6 +56,7 @@ impl Default for ApprovalStatus {
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerContext {
+    #[serde(alias = "morning", alias = "evening", alias = "idle", alias = "default", alias = "general")]
     Any,
     Tap,
     ScreenOpen,
@@ -375,7 +376,7 @@ pub struct PendingMcpApproval {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct ResolveMcpApprovalRequest {
-    #[serde(alias = "edited_args", alias = "arguments")]
+    #[serde(alias = "edited_arguments", alias = "edited_args", alias = "arguments", alias = "args")]
     pub payload_json: Option<serde_json::Value>,
 }
 
@@ -423,6 +424,7 @@ pub struct VaultNoteDetail {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct DistillVaultRequest {
     pub title: String,
+    #[serde(alias = "content", alias = "markdown", alias = "body")]
     pub content_md: String,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -470,11 +472,12 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateCompanionPhraseRequest {
+    #[serde(alias = "text", alias = "phrase")]
     pub phrase_text: String,
-    #[serde(default)]
+    #[serde(default, alias = "category", alias = "context")]
     pub trigger_context: TriggerContext,
     pub animation_hint: Option<CompanionAnimationHint>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "enabled")]
     pub active: bool,
 }
 

@@ -1297,9 +1297,19 @@ impl IntelligenceService {
         ctx: McpCallContext,
     ) -> Result<McpToolExecutionOutcome, ApiError> {
         let catalog = mcp_tool_catalog();
+        let raw_normalized = tool_name.trim().replace('.', "_");
+        let normalized_name = match raw_normalized.as_str() {
+            "finance_add_asset" | "finance_create_asset" | "finance_update_asset" => {
+                "finance_upsert_asset"
+            }
+            "todos_add_task" => "todos_create_task",
+            "goals_create" | "goals_create_goal" | "goals_update_goal" => "goals_create_or_update",
+            "dashboards_create_deck" => "dashboards_create",
+            other => other,
+        };
         let spec = catalog
             .iter()
-            .find(|t| t.name == tool_name)
+            .find(|t| t.name == tool_name || t.name == normalized_name)
             .ok_or_else(|| ApiError::not_found(format!("Unknown MCP tool '{tool_name}'")))?;
 
         let args = if arguments.is_null() {

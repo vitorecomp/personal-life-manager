@@ -455,6 +455,24 @@ impl IntelligenceService {
         req: CreateAgentTriggerRequest,
     ) -> Result<AgentTrigger, ApiError> {
         let agent = self.fetch_raw_agent(lookup).await?;
+        if req.trigger_type == AgentTriggerType::Cron {
+            let raw_cron = req
+                .config_json
+                .get("cron")
+                .or_else(|| req.config_json.get("cron_expr"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if raw_cron.is_empty() {
+                return Err(ApiError::bad_request(
+                    "Cron trigger requires a non-empty cron expression in config_json.cron",
+                ));
+            }
+            let normalized_cron = normalize_cron_for_scheduler(raw_cron);
+            Job::new_async(normalized_cron.as_str(), |_uuid, _l| Box::pin(async {})).map_err(
+                |e| ApiError::bad_request(format!("Invalid cron expression '{raw_cron}': {e}")),
+            )?;
+        }
         let id = new_uuid_v7();
 
         let next_run_at = req.next_run_at.or_else(|| {
@@ -503,6 +521,24 @@ impl IntelligenceService {
 
         let trigger_type = req.trigger_type.unwrap_or(existing.trigger_type);
         let config_json = req.config_json.unwrap_or(existing.config_json);
+        if trigger_type == AgentTriggerType::Cron {
+            if let Some(raw_cron) = config_json
+                .get("cron")
+                .or_else(|| config_json.get("cron_expr"))
+                .and_then(|v| v.as_str())
+            {
+                let trimmed = raw_cron.trim();
+                if trimmed.is_empty() {
+                    return Err(ApiError::bad_request(
+                        "Cron trigger requires a non-empty cron expression",
+                    ));
+                }
+                let normalized_cron = normalize_cron_for_scheduler(trimmed);
+                Job::new_async(normalized_cron.as_str(), |_uuid, _l| Box::pin(async {})).map_err(
+                    |e| ApiError::bad_request(format!("Invalid cron expression '{trimmed}': {e}")),
+                )?;
+            }
+        }
         let enabled = req.enabled.unwrap_or(existing.enabled);
         let next_run_at = req.next_run_at.or(existing.next_run_at);
 

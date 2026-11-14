@@ -143,13 +143,17 @@ pub struct CloneDashboardRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct ReorderDashboardsRequest {
+    #[serde(alias = "ordered_ids", alias = "ids")]
     pub dashboard_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct CreateWidgetRequest {
+    #[serde(alias = "name", alias = "label")]
     pub title: String,
+    #[serde(alias = "source_type")]
     pub source_kind: WidgetSourceKind,
+    #[serde(alias = "widget_type", alias = "renderer")]
     pub renderer_kind: WidgetRendererKind,
     #[serde(default)]
     pub grid_rect: GridRect,
@@ -163,8 +167,11 @@ pub struct CreateWidgetRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct UpdateWidgetRequest {
+    #[serde(alias = "name", alias = "label")]
     pub title: Option<String>,
+    #[serde(alias = "source_type")]
     pub source_kind: Option<WidgetSourceKind>,
+    #[serde(alias = "widget_type", alias = "renderer")]
     pub renderer_kind: Option<WidgetRendererKind>,
     pub grid_rect: Option<GridRect>,
     pub source_config: Option<serde_json::Value>,

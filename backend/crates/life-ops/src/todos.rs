@@ -1683,6 +1683,7 @@ fn parse_weekday(s: &str) -> Option<Weekday> {
 }
 
 fn parse_duration_token(s: &str) -> Option<i32> {
+    let s = s.strip_prefix('~').unwrap_or(s);
     // 1. Combined `<H>h<M>m` (e.g. `1h30m`)
     if let Some(h_idx) = s.find('h') {
         let h_part = &s[..h_idx];

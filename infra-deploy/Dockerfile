@@ -10,7 +10,7 @@ ENV CI=true \
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY .npmrc package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/api-client/package.json ./packages/api-client/package.json
 COPY packages/ui/package.json ./packages/ui/package.json
 COPY apps/web/package.json ./apps/web/package.json

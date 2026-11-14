@@ -43,7 +43,7 @@ corepack pnpm@10.34.7 --filter @hermes/mobile dev   # http://127.0.0.1:5174
 ### Vault & Dropbox sync (repo root)
 ```bash
 ./scripts/download_brain.sh
-./scripts/sync_dropbox.sh status
+./scripts/sync_dropbox.sh check
 ```
 
 ## Critical Rules & Conventions

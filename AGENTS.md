@@ -138,7 +138,7 @@ From the repository root:
 ./scripts/download_brain.sh
 
 # Push/pull local data/ with Dropbox via rclone
-./scripts/sync_dropbox.sh status
+./scripts/sync_dropbox.sh check
 ```
 
 ---

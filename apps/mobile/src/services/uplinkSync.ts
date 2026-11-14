@@ -112,7 +112,6 @@ export async function probeAndVerifyUplink(
           uplinkStatus: 'online',
           lastLatencyMs: latencyMs,
           lastVerifiedAt: nowIso,
-          lastServerSeq: latestSeq,
         });
         return {
           online: true,
@@ -213,6 +212,7 @@ export async function runDeltaSync(
 
   engine.saveUplinkConfig({ uplinkStatus: 'syncing' });
 
+  const prePushCursor = cfg.last_server_seq;
   const outbox = engine.getOutboxMutations();
   const mutationIds = outbox.map((m) => m.mutation_id);
   let pushCompleted = outbox.length === 0;
@@ -220,7 +220,9 @@ export async function runDeltaSync(
   let pushedCount = 0;
   let conflictsResolved = 0;
   let totalPulledCount = 0;
-  let latestSeq = cfg.last_server_seq;
+  let pushServerSeq = prePushCursor;
+  let pullCursor = prePushCursor;
+  let latestSeq = prePushCursor;
   let lastAttemptedUrl = candidates[0]!;
   let lastStatusCode: number | null = null;
   let lastError: string | null = null;
@@ -267,13 +269,14 @@ export async function runDeltaSync(
         pushedCount = Number(pushBody.applied_count ?? outbox.length);
         conflictsResolved = Number(pushBody.conflicts_resolved ?? 0);
         const pushSeq = Number(
-          pushBody.server_seq ?? pushBody.current_server_seq ?? latestSeq,
+          pushBody.server_seq ?? pushBody.current_server_seq ?? prePushCursor,
         );
-        if (Number.isFinite(pushSeq) && pushSeq > latestSeq) {
-          latestSeq = pushSeq;
+        if (Number.isFinite(pushSeq) && pushSeq > pushServerSeq) {
+          pushServerSeq = pushSeq;
         }
 
-        engine.acknowledgeOutboxMutations(mutationIds, latestSeq);
+        // Preserve pre-pull last_server_seq watermark until Step 2 pulls deltas
+        engine.acknowledgeOutboxMutations(mutationIds);
         pushCompleted = true;
       } catch (err) {
         lastStatusCode = null;
@@ -282,10 +285,11 @@ export async function runDeltaSync(
       }
     }
 
-    // Step 2: Pull delta changes across all pages (`has_more` & `next_seq`)
-    let cursor = engine.getUplinkConfig().last_server_seq;
+    // Step 2: Pull delta changes across all pages (`has_more` & `next_seq`) starting from pre-pull watermark
+    let cursor = pullCursor;
     let pullRetriableError = false;
     let pullTerminalError = false;
+    let allPullPagesCompleted = false;
 
     try {
       for (let page = 0; page < maxPullPages; page += 1) {
@@ -328,27 +332,37 @@ export async function runDeltaSync(
           const pageSeq = Number.isFinite(rawNextSeq) ? rawNextSeq : cursor;
           totalPulledCount += engine.applyPulledChanges(changes, pageSeq);
           if (!Number.isFinite(rawNextSeq) || rawNextSeq <= cursor) {
-            const fallbackSeq = Number.isFinite(rawLatestSeq) ? rawLatestSeq : pageSeq;
+            const fallbackSeq = Math.max(
+              pageSeq,
+              pushServerSeq,
+              Number.isFinite(rawLatestSeq) ? rawLatestSeq : 0,
+            );
             if (fallbackSeq > latestSeq) {
               latestSeq = fallbackSeq;
             }
+            pullCursor = latestSeq;
+            allPullPagesCompleted = true;
             break;
           }
           cursor = rawNextSeq;
+          pullCursor = cursor;
           if (cursor > latestSeq) {
             latestSeq = cursor;
           }
           engine.saveUplinkConfig({ lastServerSeq: cursor });
         } else {
-          const finalSeq = Number.isFinite(rawLatestSeq)
-            ? rawLatestSeq
-            : Number.isFinite(rawNextSeq)
-              ? rawNextSeq
-              : Math.max(latestSeq, cursor);
+          const finalSeq = Math.max(
+            cursor,
+            pushServerSeq,
+            Number.isFinite(rawLatestSeq) ? rawLatestSeq : 0,
+            Number.isFinite(rawNextSeq) ? rawNextSeq : 0,
+          );
           if (finalSeq > latestSeq) {
             latestSeq = finalSeq;
           }
+          pullCursor = latestSeq;
           totalPulledCount += engine.applyPulledChanges(changes, latestSeq);
+          allPullPagesCompleted = true;
           break;
         }
       }
@@ -365,12 +379,14 @@ export async function runDeltaSync(
       break;
     }
 
+    const finalPersistedSeq = allPullPagesCompleted ? Math.max(latestSeq, pushServerSeq) : pullCursor;
+    latestSeq = finalPersistedSeq;
     const nowIso = new Date().toISOString();
     engine.saveUplinkConfig({
       activeServerUrl: candidateUrl,
       uplinkStatus: 'online',
       lastVerifiedAt: nowIso,
-      lastServerSeq: latestSeq,
+      lastServerSeq: finalPersistedSeq,
       lastSyncAt: nowIso,
     });
 
@@ -379,7 +395,7 @@ export async function runDeltaSync(
       pushedCount,
       pulledCount: totalPulledCount,
       conflictsResolved,
-      latestServerSeq: latestSeq,
+      latestServerSeq: finalPersistedSeq,
       activeUrl: candidateUrl,
       statusCode: 200,
       error: null,
@@ -397,7 +413,7 @@ export async function runDeltaSync(
     pushedCount: pushCompleted ? pushedCount : 0,
     pulledCount: totalPulledCount,
     conflictsResolved: pushCompleted ? conflictsResolved : 0,
-    latestServerSeq: latestSeq,
+    latestServerSeq: engine.getUplinkConfig().last_server_seq,
     activeUrl: lastAttemptedUrl,
     statusCode: lastStatusCode,
     error: lastError ?? 'All sync endpoints unreachable',
@@ -580,27 +596,37 @@ export async function executeMcpApproval(options: {
 }): Promise<boolean> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const baseUrl = normalizeBaseUrl(options.activeUrl);
-  const res = await fetchImpl(
-    `${baseUrl}/api/mcp/approvals/${encodeURIComponent(options.approvalId)}/${options.decision}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...(options.decryptedPat ? { Authorization: `Bearer ${options.decryptedPat}` } : {}),
+
+  let requestBody = '{}';
+  if (options.decision === 'approve' && options.payloadJson !== undefined && options.payloadJson !== null) {
+    let parsedPayload: unknown = options.payloadJson;
+    if (typeof options.payloadJson === 'string') {
+      try {
+        parsedPayload = JSON.parse(options.payloadJson);
+      } catch {
+        return false;
+      }
+    }
+    requestBody = JSON.stringify({ payload_json: parsedPayload });
+  }
+
+  try {
+    const res = await fetchImpl(
+      `${baseUrl}/api/mcp/approvals/${encodeURIComponent(options.approvalId)}/${options.decision}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(options.decryptedPat ? { Authorization: `Bearer ${options.decryptedPat}` } : {}),
+        },
+        body: requestBody,
       },
-      body:
-        options.decision === 'approve' && options.payloadJson
-          ? JSON.stringify({
-              payload_json:
-                typeof options.payloadJson === 'string'
-                  ? JSON.parse(options.payloadJson)
-                  : options.payloadJson,
-            })
-          : JSON.stringify({}),
-    },
-  );
-  return res.ok;
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function fetchCompanionNudges(options: {

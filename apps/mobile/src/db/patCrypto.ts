@@ -2,10 +2,34 @@ const VAULT_CIPHER_PREFIX = 'enc:v1:';
 const DEFAULT_VAULT_SECRET = 'HERMES_COMPANION_AT_REST_CIPHER_KEY_2026_V1';
 
 function buildKeySchedule(clientId: string): Uint8Array {
-  const seed = `${DEFAULT_VAULT_SECRET}::${clientId || 'hermes-mobile-default'}`;
-  const out = new Uint8Array(seed.length);
-  for (let i = 0; i < seed.length; i += 1) {
-    out[i] = (seed.charCodeAt(i) ^ ((i * 37 + 0x5a) & 0xff)) & 0xff;
+  const encoder = new TextEncoder();
+  const secretBytes = encoder.encode(DEFAULT_VAULT_SECRET);
+  const clientBytes = encoder.encode(clientId || 'hermes-mobile-default');
+
+  // FNV-1a 32-bit digest over secret::clientId so clientId diffuses into every byte from index 0
+  let h1 = 0x811c9dc5;
+  for (let i = 0; i < secretBytes.length; i += 1) {
+    h1 ^= secretBytes[i]!;
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+  }
+  h1 ^= 0x3a;
+  h1 = Math.imul(h1, 0x01000193) >>> 0;
+  for (let i = 0; i < clientBytes.length; i += 1) {
+    h1 ^= clientBytes[i]!;
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+  }
+
+  const scheduleLen = Math.max(64, secretBytes.length + clientBytes.length);
+  const out = new Uint8Array(scheduleLen);
+  let state = h1 || 0x9e3779b9;
+  for (let i = 0; i < scheduleLen; i += 1) {
+    state ^= (state << 13) >>> 0;
+    state ^= state >>> 17;
+    state ^= (state << 5) >>> 0;
+    const sByte = secretBytes[i % secretBytes.length]!;
+    const cByte = clientBytes[i % clientBytes.length]!;
+    const digestByte = (h1 >>> ((i & 3) * 8)) & 0xff;
+    out[i] = (sByte ^ cByte ^ digestByte ^ (state & 0xff) ^ ((i * 37 + 0x5a) & 0xff)) & 0xff;
   }
   return out;
 }

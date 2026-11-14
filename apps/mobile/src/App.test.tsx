@@ -198,10 +198,14 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
   it('[F34] encrypts PAT at rest and never leaks plaintext plm_pat_ token to localStorage or sessionStorage', async () => {
     const rawToken = 'plm_pat_99887766554433221100aabbccddeeff';
     const cipher = encryptPat(rawToken, 'client-01');
+    const cipherOtherClient = encryptPat(rawToken, 'client-02');
     expect(cipher).toMatch(/^enc:v1:[0-9a-f]+$/);
+    expect(cipher).not.toBe(cipherOtherClient);
+    expect(cipher.slice(0, 16)).not.toBe(cipherOtherClient.slice(0, 16));
     expect(cipher).not.toContain('plm_pat_');
     expect(cipher).not.toContain('99887766');
     expect(decryptPat(cipher, 'client-01')).toBe(rawToken);
+    expect(decryptPat(cipherOtherClient, 'client-02')).toBe(rawToken);
 
     // Parse QR pairing payload
     const qrParsed = parsePairingQrPayload(
@@ -311,6 +315,9 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
     expect(probeRes.online).toBe(true);
     expect(probeRes.activeRole).toBe('FALLBACK');
     expect(probeRes.activeUrl).toBe('http://127.0.0.1:8080');
+    expect(probeRes.latestServerSeq).toBe(5);
+    // probeAndVerifyUplink MUST NOT advance uplink_config.last_server_seq before pulling
+    expect(engine.getUplinkConfig().last_server_seq).toBe(0);
 
     // 2. Simulate HTTP 503 during push -> outbox must remain intact with incremented retry_count
     const failPushFetch = vi.fn(async () => new Response('Unavailable', { status: 503 }));
@@ -319,8 +326,43 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
     expect(engine.getOutboxMutations().length).toBe(1);
     expect(engine.getOutboxMutations()[0]!.retry_count).toBe(1);
 
-    // 3. Simulate HTTP 200 push + pull with LWW update and delete tombstone
+    // 3. Simulate HTTP 200 push + stateful pull filtering server_seq > since (starting from since=0)
     const remoteTaskId = generateUuidV7();
+    const serverLog: Array<{
+      server_seq: number;
+      entity_table: string;
+      entity_id: string;
+      op: 'upsert' | 'delete';
+      payload: Record<string, unknown>;
+      changed_at: string;
+    }> = [
+      {
+        server_seq: 4,
+        entity_table: 'tasks',
+        entity_id: remoteTaskId,
+        op: 'upsert',
+        payload: {
+          id: remoteTaskId,
+          title: 'Server Hydrated Task',
+          status: 'todo',
+          priority: 'high',
+          updated_at: '2026-11-14T20:00:00Z',
+        },
+        changed_at: '2026-11-14T20:00:00Z',
+      },
+      {
+        server_seq: 7,
+        entity_table: 'tasks',
+        entity_id: task.id,
+        op: 'delete',
+        payload: {
+          id: task.id,
+          deleted_at: '2099-01-01T00:00:00Z',
+          updated_at: '2099-01-01T00:00:00Z',
+        },
+        changed_at: '2099-01-01T00:00:00Z',
+      },
+    ];
     const okSyncFetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/sync/push')) {
@@ -329,36 +371,12 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }
+      const parsedUrl = new URL(url);
+      const since = Number(parsedUrl.searchParams.get('since') ?? 0);
+      const matching = serverLog.filter((entry) => entry.server_seq > since);
       return new Response(
         JSON.stringify({
-          changes: [
-            {
-              server_seq: 7,
-              entity_table: 'tasks',
-              entity_id: remoteTaskId,
-              op: 'upsert',
-              payload: {
-                id: remoteTaskId,
-                title: 'Server Hydrated Task',
-                status: 'todo',
-                priority: 'high',
-                updated_at: '2026-11-14T20:00:00Z',
-              },
-              changed_at: '2026-11-14T20:00:00Z',
-            },
-            {
-              server_seq: 8,
-              entity_table: 'tasks',
-              entity_id: task.id,
-              op: 'delete',
-              payload: {
-                id: task.id,
-                deleted_at: '2099-01-01T00:00:00Z',
-                updated_at: '2099-01-01T00:00:00Z',
-              },
-              changed_at: '2099-01-01T00:00:00Z',
-            },
-          ],
+          changes: matching,
           latest_server_seq: 8,
           has_more: false,
         }),
@@ -654,7 +672,7 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
         );
       }
 
-      if (url === 'http://100.64.0.10:8080/api/sync/pull?since=1') {
+      if (url === 'http://100.64.0.10:8080/api/sync/pull?since=0') {
         return new Response(
           JSON.stringify({
             changes: [
@@ -718,7 +736,7 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
     expect(calledUrls).toEqual([
       'http://192.168.1.42:8080/api/sync/push',
       'http://100.64.0.10:8080/api/sync/push',
-      'http://100.64.0.10:8080/api/sync/pull?since=1',
+      'http://100.64.0.10:8080/api/sync/pull?since=0',
       'http://100.64.0.10:8080/api/sync/pull?since=2',
     ]);
     expect(engine.getTask(localTask.id)).toBeTruthy();
@@ -971,5 +989,614 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  // =========================================================================
+  // Iteration 3 Stateful Sync Watermark, Natural-Key LWW/Tombstone & DAG Suite
+  // =========================================================================
+
+  it('[F34] preserves pre-pull last_server_seq across probeAndVerifyUplink (latest_server_seq: 42), UI TEST UPLINK, and window online range reconnect to hydrate pre-existing server tasks', async () => {
+    // Part A: Direct probeAndVerifyUplink (latest_server_seq: 42) -> runDeltaSync queries ?since=0
+    const engine = await MobileSqliteEngine.create({ fresh: true });
+    engine.saveUplinkConfig({
+      primaryServerUrl: 'http://127.0.0.1:8080',
+      rawPat: 'plm_pat_iter3_cursor_guard_token',
+    });
+
+    const preExistingId1 = generateUuidV7();
+    const preExistingId2 = generateUuidV7();
+    const pullUrlsA: string[] = [];
+
+    const statefulOracleA = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/verify')) {
+        return new Response(
+          JSON.stringify({
+            authenticated: true,
+            auth_type: 'pat',
+            token_name: 'Cursor Guard PAT',
+            latest_server_seq: 42,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/api/sync/pull')) {
+        pullUrlsA.push(url);
+        const since = Number(new URL(url).searchParams.get('since') ?? 0);
+        const serverChanges = [
+          {
+            server_seq: 41,
+            entity_table: 'tasks',
+            entity_id: preExistingId1,
+            op: 'upsert' as const,
+            payload: {
+              id: preExistingId1,
+              title: 'Bootstrap Desktop Task 41',
+              status: 'todo',
+              priority: 'high',
+              updated_at: '2026-11-14T19:00:00Z',
+            },
+            changed_at: '2026-11-14T19:00:00Z',
+          },
+          {
+            server_seq: 42,
+            entity_table: 'tasks',
+            entity_id: preExistingId2,
+            op: 'upsert' as const,
+            payload: {
+              id: preExistingId2,
+              title: 'Bootstrap Desktop Task 42',
+              status: 'in_progress',
+              priority: 'urgent',
+              updated_at: '2026-11-14T19:05:00Z',
+            },
+            changed_at: '2026-11-14T19:05:00Z',
+          },
+        ].filter((c) => c.server_seq > since);
+
+        return new Response(
+          JSON.stringify({
+            changes: serverChanges,
+            next_seq: 42,
+            latest_server_seq: 42,
+            has_more: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    const probe = await probeAndVerifyUplink(engine, { fetchImpl: statefulOracleA });
+    expect(probe.online).toBe(true);
+    expect(probe.latestServerSeq).toBe(42);
+    expect(engine.getUplinkConfig().last_server_seq).toBe(0);
+
+    const delta = await runDeltaSync(engine, { fetchImpl: statefulOracleA });
+    expect(delta.success).toBe(true);
+    expect(pullUrlsA).toEqual(['http://127.0.0.1:8080/api/sync/pull?since=0']);
+    expect(delta.pulledCount).toBe(2);
+    expect(engine.getUplinkConfig().last_server_seq).toBe(42);
+    expect(engine.getTask(preExistingId1)?.title).toBe('Bootstrap Desktop Task 41');
+    expect(engine.getTask(preExistingId2)?.title).toBe('Bootstrap Desktop Task 42');
+
+    // Part B: Full <App /> UI pairing via ⚡ TEST UPLINK + window 'online' range reconnect hydrating TodosSurface
+    localStorage.clear();
+    const uiBootstrapTaskId = generateUuidV7();
+    const uiRangeTaskId = generateUuidV7();
+    const uiServerLog: Array<{
+      server_seq: number;
+      entity_table: string;
+      entity_id: string;
+      op: 'upsert';
+      payload: Record<string, unknown>;
+      changed_at: string;
+    }> = [
+      {
+        server_seq: 1,
+        entity_table: 'tasks',
+        entity_id: uiBootstrapTaskId,
+        op: 'upsert',
+        payload: {
+          id: uiBootstrapTaskId,
+          title: 'UI Paired Bootstrap Server Task',
+          status: 'todo',
+          priority: 'high',
+          updated_at: '2026-11-14T20:00:00Z',
+        },
+        changed_at: '2026-11-14T20:00:00Z',
+      },
+    ];
+    const uiPullUrls: string[] = [];
+
+    const uiOracleFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const maxSeq = uiServerLog.reduce((acc, item) => Math.max(acc, item.server_seq), 0);
+      if (url.endsWith('/api/auth/verify')) {
+        return new Response(
+          JSON.stringify({
+            authenticated: true,
+            auth_type: 'pat',
+            token_name: 'UI Pairing PAT',
+            latest_server_seq: maxSeq,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/api/sync/pull')) {
+        uiPullUrls.push(url);
+        const since = Number(new URL(url).searchParams.get('since') ?? 0);
+        const filtered = uiServerLog.filter((item) => item.server_seq > since);
+        return new Response(
+          JSON.stringify({
+            changes: filtered,
+            next_seq: maxSeq,
+            latest_server_seq: maxSeq,
+            has_more: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', uiOracleFetch);
+
+    try {
+      render(<App />);
+      await waitFor(() => {
+        expect(screen.getByTestId('hermes-mobile-shell').getAttribute('data-db-ready')).toBe(
+          'true',
+        );
+      });
+
+      fireEvent.click(screen.getByTestId('mobile-tab-uplink_config'));
+      const inputs = Array.from(document.querySelectorAll('input'));
+      fireEvent.change(inputs[0]!, { target: { value: 'http://127.0.0.1:8080' } });
+      fireEvent.change(inputs[2]!, { target: { value: 'plm_pat_ui_pairing_123456' } });
+      fireEvent.click(screen.getByTestId('uplink-test-btn'));
+
+      await waitFor(() => {
+        expect(uiPullUrls).toContain('http://127.0.0.1:8080/api/sync/pull?since=0');
+      });
+
+      fireEvent.click(screen.getByTestId('mobile-tab-todos'));
+      await waitFor(() => {
+        expect(screen.getByTestId('hermes-mobile-shell').textContent).toContain(
+          'UI Paired Bootstrap Server Task',
+        );
+      });
+
+      // Server receives seq=2 while mobile briefly goes offline then returns to Wi-Fi range
+      fireEvent.offline(window);
+      uiServerLog.push({
+        server_seq: 2,
+        entity_table: 'tasks',
+        entity_id: uiRangeTaskId,
+        op: 'upsert',
+        payload: {
+          id: uiRangeTaskId,
+          title: 'UI Range Reconnect Server Task',
+          status: 'todo',
+          priority: 'urgent',
+          updated_at: '2026-11-14T20:10:00Z',
+        },
+        changed_at: '2026-11-14T20:10:00Z',
+      });
+      fireEvent.online(window);
+
+      await waitFor(() => {
+        expect(uiPullUrls).toContain('http://127.0.0.1:8080/api/sync/pull?since=1');
+        expect(screen.getByTestId('hermes-mobile-shell').textContent).toContain(
+          'UI Range Reconnect Server Task',
+        );
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('[F34] pulls from pre-push cursor (?since=10) when sync_outbox pushes server_seq=13/14 so concurrent Web tasks 11..12 and server LWW winner are hydrated', async () => {
+    const engine = await MobileSqliteEngine.create({ fresh: true });
+    engine.saveUplinkConfig({
+      primaryServerUrl: 'http://127.0.0.1:8080',
+      rawPat: 'plm_pat_concurrent_push_pull_token',
+    });
+
+    // Seed shared task at seq=10
+    const sharedTaskId = generateUuidV7();
+    engine.applyPulledChanges(
+      [
+        {
+          server_seq: 10,
+          entity_table: 'tasks',
+          entity_id: sharedTaskId,
+          op: 'upsert',
+          payload: {
+            id: sharedTaskId,
+            title: 'Shared Task Initial v1',
+            status: 'todo',
+            priority: 'medium',
+            updated_at: '2026-11-14T18:00:00Z',
+          },
+          changed_at: '2026-11-14T18:00:00Z',
+        },
+      ],
+      10,
+    );
+    expect(engine.getUplinkConfig().last_server_seq).toBe(10);
+
+    // Offline Mobile captures a new task
+    const { task: mobileOfflineTask } = engine.createTaskFromQuickCapture(
+      'Mobile Commuter Offline Capture',
+    );
+    expect(engine.getOutboxMutations().length).toBe(1);
+
+    const webTask11Id = generateUuidV7();
+    const webTask12Id = generateUuidV7();
+    const pullUrls: string[] = [];
+    let failFirstPull = true;
+
+    const concurrentOracle = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/sync/push')) {
+        return new Response(
+          JSON.stringify({
+            applied_count: 1,
+            conflicts_resolved: 0,
+            server_seq: 13,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/api/sync/pull')) {
+        pullUrls.push(url);
+        if (failFirstPull) {
+          failFirstPull = false;
+          return new Response('Temporary pull outage', { status: 503 });
+        }
+        const since = Number(new URL(url).searchParams.get('since') ?? 0);
+        const serverLog = [
+          {
+            server_seq: 11,
+            entity_table: 'tasks',
+            entity_id: webTask11Id,
+            op: 'upsert' as const,
+            payload: {
+              id: webTask11Id,
+              title: 'Concurrent Web Task 11',
+              status: 'todo',
+              priority: 'high',
+              updated_at: '2026-11-14T19:01:00Z',
+            },
+            changed_at: '2026-11-14T19:01:00Z',
+          },
+          {
+            server_seq: 12,
+            entity_table: 'tasks',
+            entity_id: webTask12Id,
+            op: 'upsert' as const,
+            payload: {
+              id: webTask12Id,
+              title: 'Concurrent Web Task 12',
+              status: 'in_progress',
+              priority: 'urgent',
+              updated_at: '2026-11-14T19:02:00Z',
+            },
+            changed_at: '2026-11-14T19:02:00Z',
+          },
+          {
+            server_seq: 12,
+            entity_table: 'tasks',
+            entity_id: sharedTaskId,
+            op: 'upsert' as const,
+            payload: {
+              id: sharedTaskId,
+              title: 'Shared Task — WEB_LWW_WINNER',
+              status: 'done',
+              priority: 'urgent',
+              updated_at: '2099-01-01T00:00:00Z',
+            },
+            changed_at: '2099-01-01T00:00:00Z',
+          },
+          {
+            server_seq: 13,
+            entity_table: 'tasks',
+            entity_id: mobileOfflineTask.id,
+            op: 'upsert' as const,
+            payload: {
+              id: mobileOfflineTask.id,
+              title: mobileOfflineTask.title,
+              status: mobileOfflineTask.status,
+              priority: mobileOfflineTask.priority,
+              updated_at: mobileOfflineTask.updated_at,
+            },
+            changed_at: mobileOfflineTask.updated_at,
+          },
+        ].filter((c) => c.server_seq > since);
+
+        return new Response(
+          JSON.stringify({
+            changes: serverLog,
+            next_seq: 13,
+            latest_server_seq: 13,
+            has_more: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+
+    // Attempt 1: Push succeeds (seq=13), Step 2 pull fails (503) -> last_server_seq MUST stay 10!
+    const interrupted = await runDeltaSync(engine, { fetchImpl: concurrentOracle });
+    expect(interrupted.success).toBe(false);
+    expect(engine.getOutboxMutations().length).toBe(0);
+    expect(engine.getUplinkConfig().last_server_seq).toBe(10);
+    expect(pullUrls).toEqual(['http://127.0.0.1:8080/api/sync/pull?since=10']);
+
+    // Attempt 2: Pull resumes from ?since=10 and hydrates 11..12 + server LWW winner!
+    const recovered = await runDeltaSync(engine, { fetchImpl: concurrentOracle });
+    expect(recovered.success).toBe(true);
+    expect(pullUrls).toEqual([
+      'http://127.0.0.1:8080/api/sync/pull?since=10',
+      'http://127.0.0.1:8080/api/sync/pull?since=10',
+    ]);
+    expect(engine.getUplinkConfig().last_server_seq).toBe(13);
+    expect(engine.getTask(webTask11Id)?.title).toBe('Concurrent Web Task 11');
+    expect(engine.getTask(webTask12Id)?.title).toBe('Concurrent Web Task 12');
+    expect(engine.getTask(sharedTaskId)?.title).toBe('Shared Task — WEB_LWW_WINNER');
+    expect(engine.getTask(mobileOfflineTask.id)?.title).toBe('Mobile Commuter Offline Capture');
+  });
+
+  it('[F34] enforces natural-key LWW, canonical id adoption, and server delete tombstones on routine_logs (routine_item_id, log_date) and daily_checkins (checkin_date)', async () => {
+    const engine = await MobileSqliteEngine.create({ fresh: true });
+    const habitItem = engine.listRoutineStacks('workday', '2026-11-14')[0]!.items[0]!;
+
+    // 1. Local offline habit completion with UUID_MOB
+    const localLog = engine.toggleRoutineItemLog(habitItem.id, '2026-11-14', 'completed');
+    expect(localLog.status).toBe('completed');
+
+    // Stale Web log with distinct UUID_WEB_STALE MUST NOT clobber newer local 'completed' row
+    const staleWebLogId = generateUuidV7();
+    const staleApplied = engine.applyPulledChanges(
+      [
+        {
+          server_seq: 1,
+          entity_table: 'routine_logs',
+          entity_id: staleWebLogId,
+          op: 'upsert',
+          payload: {
+            id: staleWebLogId,
+            routine_item_id: habitItem.id,
+            log_date: '2026-11-14',
+            status: 'skipped',
+            notes: 'stale-web-log',
+            updated_at: '2020-01-01T00:00:00Z',
+          },
+          changed_at: '2020-01-01T00:00:00Z',
+        },
+      ],
+      1,
+    );
+    expect(staleApplied).toBe(0);
+    const afterStale = engine
+      .listRoutineStacks('workday', '2026-11-14')[0]!
+      .items.find((i) => i.id === habitItem.id)!.todayLog;
+    expect(afterStale?.status).toBe('completed');
+    expect(afterStale?.id).toBe(localLog.id);
+
+    // 2. Newer Web log with distinct UUID_WEB_WIN wins LWW AND adopts canonical id = UUID_WEB_WIN
+    const newerWebLogId = generateUuidV7();
+    const winApplied = engine.applyPulledChanges(
+      [
+        {
+          server_seq: 2,
+          entity_table: 'routine_logs',
+          entity_id: newerWebLogId,
+          op: 'upsert',
+          payload: {
+            id: newerWebLogId,
+            routine_item_id: habitItem.id,
+            log_date: '2026-11-14',
+            status: 'partial',
+            notes: 'newer-web-winner',
+            updated_at: '2099-01-01T00:00:00Z',
+          },
+          changed_at: '2099-01-01T00:00:00Z',
+        },
+      ],
+      2,
+    );
+    expect(winApplied).toBe(1);
+    const afterWin = engine
+      .listRoutineStacks('workday', '2026-11-14')[0]!
+      .items.find((i) => i.id === habitItem.id)!.todayLog;
+    expect(afterWin?.status).toBe('partial');
+    expect(afterWin?.id).toBe(newerWebLogId);
+
+    // 3. Subsequent server op: 'delete' tombstone for UUID_WEB_WIN (without natural key in payload) deletes cleanly!
+    const delApplied = engine.applyPulledChanges(
+      [
+        {
+          server_seq: 3,
+          entity_table: 'routine_logs',
+          entity_id: newerWebLogId,
+          op: 'delete',
+          payload: {
+            id: newerWebLogId,
+            deleted_at: '2099-01-02T00:00:00Z',
+          },
+          changed_at: '2099-01-02T00:00:00Z',
+        },
+      ],
+      3,
+    );
+    expect(delApplied).toBe(1);
+    const afterDelete = engine
+      .listRoutineStacks('workday', '2026-11-14')[0]!
+      .items.find((i) => i.id === habitItem.id)!.todayLog;
+    expect(afterDelete).toBeNull();
+
+    // 4. daily_checkins natural-key (checkin_date / log_date) LWW, canonical id adoption, and tombstone deletion
+    engine.upsertDailyCheckin({
+      logDate: '2026-11-14',
+      energyScore: 5,
+      moodScore: 5,
+      sleepHours: 8,
+      highlight: 'Local Newer Checkin',
+    });
+
+    const staleCheckinUuid = generateUuidV7();
+    const staleCheckinApplied = engine.applyPulledChanges(
+      [
+        {
+          server_seq: 4,
+          entity_table: 'daily_checkins',
+          entity_id: staleCheckinUuid,
+          op: 'upsert',
+          payload: {
+            id: staleCheckinUuid,
+            checkin_date: '2026-11-14',
+            energy_score: 1,
+            mood_score: 1,
+            sleep_hours: 4,
+            highlight: 'Stale Web Checkin',
+            updated_at: '2020-01-01T00:00:00Z',
+          },
+          changed_at: '2020-01-01T00:00:00Z',
+        },
+      ],
+      4,
+    );
+    expect(staleCheckinApplied).toBe(0);
+    expect(engine.getDailyCheckin('2026-11-14')?.highlight).toBe('Local Newer Checkin');
+
+    const winningCheckinUuid = generateUuidV7();
+    const winCheckinApplied = engine.applyPulledChanges(
+      [
+        {
+          server_seq: 5,
+          entity_table: 'daily_checkins',
+          entity_id: winningCheckinUuid,
+          op: 'upsert',
+          payload: {
+            id: winningCheckinUuid,
+            checkin_date: '2026-11-14',
+            energy_score: 4,
+            mood_score: 4,
+            sleep_hours: 7.5,
+            highlight: 'Canonical Web Checkin Winner',
+            updated_at: '2099-01-01T00:00:00Z',
+          },
+          changed_at: '2099-01-01T00:00:00Z',
+        },
+      ],
+      5,
+    );
+    expect(winCheckinApplied).toBe(1);
+    expect(engine.getDailyCheckin('2026-11-14')?.highlight).toBe('Canonical Web Checkin Winner');
+
+    const delCheckinApplied = engine.applyPulledChanges(
+      [
+        {
+          server_seq: 6,
+          entity_table: 'daily_checkins',
+          entity_id: winningCheckinUuid,
+          op: 'delete',
+          payload: {
+            id: winningCheckinUuid,
+            deleted_at: '2099-01-02T00:00:00Z',
+          },
+          changed_at: '2099-01-02T00:00:00Z',
+        },
+      ],
+      6,
+    );
+    expect(delCheckinApplied).toBe(1);
+    expect(engine.getDailyCheckin('2026-11-14')).toBeNull();
+  });
+
+  it('[F34][F35] topologically sorts [Child, Unrelated, Parent] tasks in getOutboxMutations and guards malformed JSON in executeMcpApproval', async () => {
+    const engine = await MobileSqliteEngine.create({ fresh: true });
+
+    // Seed synced Parent & Child tasks on the client, then enqueue [Child (_seq=1), Unrelated (_seq=2), Parent (_seq=3)]
+    const parentId = generateUuidV7();
+    const childId = generateUuidV7();
+    engine.applyPulledChanges(
+      [
+        {
+          server_seq: 1,
+          entity_table: 'tasks',
+          entity_id: parentId,
+          op: 'upsert',
+          payload: {
+            id: parentId,
+            title: 'Parent Task',
+            status: 'todo',
+            priority: 'high',
+            parent_task_id: null,
+            updated_at: '2026-11-14T18:00:00Z',
+          },
+        },
+        {
+          server_seq: 2,
+          entity_table: 'tasks',
+          entity_id: childId,
+          op: 'upsert',
+          payload: {
+            id: childId,
+            title: 'Child Subtask',
+            status: 'todo',
+            priority: 'medium',
+            parent_task_id: parentId,
+            updated_at: '2026-11-14T18:01:00Z',
+          },
+        },
+      ],
+      2,
+    );
+
+    // Enqueue in adversarial order: Child (_seq=1), Unrelated (_seq=2), Parent (_seq=3)
+    engine.toggleTaskCompletion(childId);
+    const { task: unrelatedTask } = engine.createTaskFromQuickCapture('Unrelated Middle Task');
+    engine.toggleTaskCompletion(parentId);
+
+    const ordered = engine.getOutboxMutations();
+    expect(ordered.length).toBe(3);
+    const parentIdx = ordered.findIndex((m) => m.entity_id === parentId);
+    const childIdx = ordered.findIndex((m) => m.entity_id === childId);
+    const unrelatedIdx = ordered.findIndex((m) => m.entity_id === unrelatedTask.id);
+    expect(parentIdx).toBeGreaterThanOrEqual(0);
+    expect(childIdx).toBeGreaterThan(parentIdx);
+    expect(unrelatedIdx).toBe(0);
+
+    // Multi-level subtask chain created directly via parentTaskId
+    engine.acknowledgeOutboxMutations(ordered.map((m) => m.mutation_id));
+    const { task: rootTask } = engine.createTaskFromQuickCapture('Root Epic');
+    const { task: midTask } = engine.createTaskFromQuickCapture('Mid Task', '2026-11-14', {
+      parentTaskId: rootTask.id,
+    });
+    const { task: leafTask } = engine.createTaskFromQuickCapture('Leaf Subtask', '2026-11-14', {
+      parentTaskId: midTask.id,
+    });
+    const chainOrdered = engine.getOutboxMutations();
+    expect(chainOrdered.map((m) => m.entity_id)).toEqual([rootTask.id, midTask.id, leafTask.id]);
+
+    // Malformed payloadJson in executeMcpApproval returns false cleanly without throwing
+    const neverCalledFetch = vi.fn();
+    await expect(
+      executeMcpApproval({
+        activeUrl: 'http://127.0.0.1:8080',
+        decryptedPat: 'plm_pat_test',
+        approvalId: 'approval-malformed-1',
+        decision: 'approve',
+        payloadJson: '{not-valid-json',
+        fetchImpl: neverCalledFetch,
+      }),
+    ).resolves.toBe(false);
+    expect(neverCalledFetch).not.toHaveBeenCalled();
   });
 });

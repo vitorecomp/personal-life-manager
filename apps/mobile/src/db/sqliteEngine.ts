@@ -491,6 +491,7 @@ CREATE TABLE IF NOT EXISTS routine_logs (
 
 CREATE TABLE IF NOT EXISTS daily_checkins (
     log_date TEXT PRIMARY KEY,
+    id TEXT NOT NULL DEFAULT '',
     day_profile_used TEXT NOT NULL DEFAULT 'workday' CHECK (day_profile_used IN (
         'workday', 'weekend', 'travel', 'minimum_viable'
     )),
@@ -734,6 +735,14 @@ export class MobileSqliteEngine {
         `ALTER TABLE uplink_config ADD COLUMN synced_entities_json TEXT NOT NULL DEFAULT '[]';`,
       );
     }
+
+    // Ensure reloaded snapshots created prior to daily_checkins.id have the canonical id column
+    const checkinCols = this.queryAll('PRAGMA table_info(daily_checkins);');
+    const hasCheckinIdCol = checkinCols.some((c) => String(c.name) === 'id');
+    if (checkinCols.length > 0 && !hasCheckinIdCol) {
+      this.db.run(`ALTER TABLE daily_checkins ADD COLUMN id TEXT NOT NULL DEFAULT '';`);
+    }
+    this.db.run(`UPDATE daily_checkins SET id = log_date WHERE id = '' OR id IS NULL;`);
 
     const nowIso = '2026-11-14T08:00:00.000Z';
     const todayDate = new Date().toISOString().slice(0, 10);
@@ -1468,7 +1477,7 @@ export class MobileSqliteEngine {
   createTaskFromQuickCapture(
     rawInput: string,
     todayIsoDate: string = new Date().toISOString().slice(0, 10),
-    options?: { projectId?: string | null },
+    options?: { projectId?: string | null; parentTaskId?: string | null },
   ): { task: MobileTaskRow; mutation: MobileSyncOutboxRow } {
     const parsed = parseTodoQuickCapture(rawInput, todayIsoDate);
     if (!parsed.valid) {
@@ -1494,6 +1503,15 @@ export class MobileSqliteEngine {
       }
     }
 
+    let resolvedParentTaskId: string | null = null;
+    if (options?.parentTaskId) {
+      const explicitParent = this.getTask(options.parentTaskId);
+      if (!explicitParent || explicitParent.deleted_at) {
+        throw new Error(`Parent task not found: ${options.parentTaskId}`);
+      }
+      resolvedParentTaskId = explicitParent.id;
+    }
+
     const nowIso = new Date().toISOString();
     const id = generateUuidV7();
     const status: MobileTaskRow['status'] = parsed.scheduledDate ? 'todo' : 'inbox';
@@ -1508,7 +1526,7 @@ export class MobileSqliteEngine {
       goal_id: null,
       course_id: null,
       lesson_id: null,
-      parent_task_id: null,
+      parent_task_id: resolvedParentTaskId,
       blocked_by_task_ids: [],
       vault_note_path: null,
       scheduled_date: parsed.scheduledDate,
@@ -1531,7 +1549,7 @@ export class MobileSqliteEngine {
         parent_task_id, blocked_by_task_ids, vault_note_path, scheduled_date, due_date,
         estimated_minutes, actual_seconds, energy_level, tags, recurrence_rule, sort_order,
         completed_at, created_at, updated_at, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, '[]', NULL, ?, NULL, ?, 0, ?, ?, NULL, 0, NULL, ?, ?, NULL)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, '[]', NULL, ?, NULL, ?, 0, ?, ?, NULL, 0, NULL, ?, ?, NULL)`,
       [
         task.id,
         task.title,
@@ -1539,6 +1557,7 @@ export class MobileSqliteEngine {
         task.status,
         task.priority,
         task.project_id,
+        task.parent_task_id,
         task.scheduled_date,
         task.estimated_minutes,
         task.energy_level,
@@ -2243,8 +2262,14 @@ export class MobileSqliteEngine {
     reflectionMd?: string;
   }): MobileDailyCheckinRow {
     const logDate = input.logDate ?? new Date().toISOString().slice(0, 10);
+    const existingRaw = this.queryOne(
+      `SELECT id, created_at, day_profile_used FROM daily_checkins WHERE log_date = ? AND deleted_at IS NULL`,
+      [logDate],
+    );
     const existing = this.getDailyCheckin(logDate);
     const nowIso = new Date().toISOString();
+    const canonicalId =
+      existingRaw?.id && String(existingRaw.id).trim() ? String(existingRaw.id).trim() : logDate;
     const createdAt = existing?.created_at ?? nowIso;
     const dayProfileUsed = input.dayProfileUsed ?? existing?.day_profile_used ?? 'workday';
     const energy = clampPulseScore(input.energyScore);
@@ -2253,9 +2278,9 @@ export class MobileSqliteEngine {
 
     this.db.run(
       `INSERT INTO daily_checkins (
-        log_date, day_profile_used, energy_score, mood_score, sleep_hours,
+        log_date, id, day_profile_used, energy_score, mood_score, sleep_hours,
         highlight, reflection_md, weekly_review_json, created_at, updated_at, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL)
       ON CONFLICT(log_date) DO UPDATE SET
         day_profile_used = excluded.day_profile_used,
         energy_score = excluded.energy_score,
@@ -2267,6 +2292,7 @@ export class MobileSqliteEngine {
         deleted_at = NULL`,
       [
         logDate,
+        canonicalId,
         dayProfileUsed,
         energy,
         mood,
@@ -2526,18 +2552,120 @@ export class MobileSqliteEngine {
       } satisfies MobileSyncOutboxRow,
     }));
 
+    // Group by table topological priority first (preserving ascending _seq order)
     withSeq.sort((a, b) => {
       const pa = TABLE_TOPOLOGICAL_PRIORITY[a.row.entity_table] ?? 99;
       const pb = TABLE_TOPOLOGICAL_PRIORITY[b.row.entity_table] ?? 99;
       if (pa !== pb) return pa - pb;
-      if (a.row.entity_table === 'tasks' && b.row.entity_table === 'tasks') {
-        if (a.row.payload.parent_task_id === b.row.entity_id) return 1;
-        if (b.row.payload.parent_task_id === a.row.entity_id) return -1;
-      }
       return a._seq - b._seq;
     });
 
-    return withSeq.map((entry) => entry.row);
+    // Apply transitive topological sort (Kahn's algorithm) over `tasks.parent_task_id`
+    // while preserving ascending `_seq` tie-breaking and gracefully handling cycles.
+    const result: MobileSyncOutboxRow[] = [];
+    let idx = 0;
+    while (idx < withSeq.length) {
+      const currentTable = withSeq[idx]!.row.entity_table;
+      if (currentTable !== 'tasks') {
+        result.push(withSeq[idx]!.row);
+        idx += 1;
+        continue;
+      }
+
+      const taskSlice: typeof withSeq = [];
+      while (idx < withSeq.length && withSeq[idx]!.row.entity_table === 'tasks') {
+        taskSlice.push(withSeq[idx]!);
+        idx += 1;
+      }
+
+      const n = taskSlice.length;
+      if (n <= 1) {
+        for (const item of taskSlice) {
+          result.push(item.row);
+        }
+        continue;
+      }
+
+      const adj: Array<Set<number>> = Array.from({ length: n }, () => new Set<number>());
+      const inDegree = new Int32Array(n);
+      const addEdge = (from: number, to: number) => {
+        if (from === to || adj[from]!.has(to)) return;
+        adj[from]!.add(to);
+        inDegree[to] = (inDegree[to] ?? 0) + 1;
+      };
+
+      // Preserve chronological mutation order for repeated mutations on the same task entity_id
+      const prevIdxByEntity = new Map<string, number>();
+      const upsertIndicesByEntity = new Map<string, number[]>();
+      for (let i = 0; i < n; i += 1) {
+        const entityId = taskSlice[i]!.row.entity_id;
+        const prevIdx = prevIdxByEntity.get(entityId);
+        if (prevIdx !== undefined) {
+          addEdge(prevIdx, i);
+        }
+        prevIdxByEntity.set(entityId, i);
+
+        if (taskSlice[i]!.row.op === 'upsert') {
+          const list = upsertIndicesByEntity.get(entityId) ?? [];
+          list.push(i);
+          upsertIndicesByEntity.set(entityId, list);
+        }
+      }
+
+      // Add transitive parent_task_id -> child edges across queued task upserts
+      for (let i = 0; i < n; i += 1) {
+        const row = taskSlice[i]!.row;
+        const rawParent = row.payload.parent_task_id;
+        const parentId = typeof rawParent === 'string' ? rawParent.trim() : '';
+        if (parentId && parentId !== row.entity_id) {
+          const parentUpserts = upsertIndicesByEntity.get(parentId);
+          if (parentUpserts) {
+            for (const pIdx of parentUpserts) {
+              addEdge(pIdx, i);
+            }
+          }
+        }
+      }
+
+      const emitted = new Uint8Array(n);
+      const ready: number[] = [];
+      for (let i = 0; i < n; i += 1) {
+        if (inDegree[i] === 0) {
+          ready.push(i);
+        }
+      }
+
+      while (ready.length > 0) {
+        // Pick the ready node with the smallest _seq
+        let bestPos = 0;
+        for (let r = 1; r < ready.length; r += 1) {
+          if (taskSlice[ready[r]!]!._seq < taskSlice[ready[bestPos]!]!._seq) {
+            bestPos = r;
+          }
+        }
+        const u = ready[bestPos]!;
+        ready.splice(bestPos, 1);
+        if (emitted[u]) continue;
+        emitted[u] = 1;
+        result.push(taskSlice[u]!.row);
+
+        for (const v of adj[u]!) {
+          inDegree[v] = (inDegree[v] ?? 0) - 1;
+          if (inDegree[v] === 0 && !emitted[v]) {
+            ready.push(v);
+          }
+        }
+      }
+
+      // Cycle fallback: emit any remaining task mutations in ascending _seq order
+      for (let i = 0; i < n; i += 1) {
+        if (!emitted[i]) {
+          result.push(taskSlice[i]!.row);
+        }
+      }
+    }
+
+    return result;
   }
 
   acknowledgeOutboxMutations(mutationIds: string[], serverSeq?: number): void {
@@ -2612,53 +2740,136 @@ export class MobileSqliteEngine {
 
       const payload = change.payload ?? {};
       const entityId = String(
-        change.entity_id || payload.id || payload.log_date || '',
+        change.entity_id ||
+          payload.id ||
+          payload.log_date ||
+          payload.checkin_date ||
+          '',
       ).trim();
       if (!entityId) continue;
 
       const isDeleteOp = change.op === 'delete' || Boolean(payload.deleted_at);
-      if (isDeleteOp) {
-        syncedSet.delete(`${table}:${entityId}`);
-      } else {
-        syncedSet.add(`${table}:${entityId}`);
-      }
+      const incomingTs = isDeleteOp
+        ? String(
+            payload.deleted_at ??
+              change.changed_at ??
+              payload.updated_at ??
+              new Date().toISOString(),
+          )
+        : String(
+            payload.updated_at ?? change.changed_at ?? new Date().toISOString(),
+          );
 
-      const incomingTs = String(
-        payload.updated_at ?? change.changed_at ?? new Date().toISOString(),
-      );
+      // Extract composite / natural unique keys for routine_logs and daily_checkins
+      const rItemId =
+        table === 'routine_logs' && payload.routine_item_id
+          ? String(payload.routine_item_id).trim()
+          : null;
+      const rLogDate =
+        table === 'routine_logs' && payload.log_date
+          ? String(payload.log_date).trim().slice(0, 10)
+          : null;
 
-      // Check if there is a newer unpushed local mutation in sync_outbox (epoch-aware RFC 3339 LWW)
-      const newerPendingOutbox = unpushedOutbox.find(
-        (m) =>
-          m.entity_table === table &&
-          m.entity_id === entityId &&
-          compareIsoTimestamps(m.client_updated_at, incomingTs) > 0,
-      );
+      const rawCheckinDate =
+        table === 'daily_checkins'
+          ? String(
+              payload.checkin_date ??
+                payload.log_date ??
+                (/^\d{4}-\d{2}-\d{2}/.test(entityId) ? entityId : ''),
+            )
+              .trim()
+              .slice(0, 10)
+          : '';
+      const cDate = /^\d{4}-\d{2}-\d{2}$/.test(rawCheckinDate) ? rawCheckinDate : null;
+
+      // Check if there is a newer unpushed local mutation in sync_outbox (epoch-aware RFC 3339 LWW + natural keys)
+      const newerPendingOutbox = unpushedOutbox.find((m) => {
+        if (m.entity_table !== table) return false;
+        let matchesTarget = m.entity_id === entityId;
+        if (!matchesTarget && table === 'routine_logs' && rItemId && rLogDate) {
+          matchesTarget =
+            String(m.payload.routine_item_id ?? '').trim() === rItemId &&
+            String(m.payload.log_date ?? '').trim().slice(0, 10) === rLogDate;
+        } else if (!matchesTarget && table === 'daily_checkins' && cDate) {
+          const mDate = String(
+            m.payload.checkin_date ?? m.payload.log_date ?? m.entity_id ?? '',
+          )
+            .trim()
+            .slice(0, 10);
+          matchesTarget = m.entity_id === cDate || mDate === cDate;
+        }
+        return matchesTarget && compareIsoTimestamps(m.client_updated_at, incomingTs) > 0;
+      });
       if (newerPendingOutbox) {
         continue;
       }
 
-      const pkCol = table === 'daily_checkins' ? 'log_date' : 'id';
-      const existingRow = this.queryOne(
-        `SELECT updated_at FROM ${table} WHERE ${pkCol} = ?`,
-        [entityId],
+      let existingRows: Record<string, unknown>[];
+      if (table === 'routine_logs') {
+        existingRows = this.queryAll(
+          `SELECT id, updated_at FROM routine_logs
+           WHERE id = ? OR (? IS NOT NULL AND ? IS NOT NULL AND routine_item_id = ? AND log_date = ?)`,
+          [entityId, rItemId, rLogDate, rItemId, rLogDate],
+        );
+      } else if (table === 'daily_checkins') {
+        existingRows = this.queryAll(
+          `SELECT id, log_date, updated_at FROM daily_checkins
+           WHERE id = ? OR log_date = ? OR (? IS NOT NULL AND log_date = ?)`,
+          [entityId, entityId.slice(0, 10), cDate, cDate],
+        );
+      } else {
+        existingRows = this.queryAll(
+          `SELECT id, updated_at FROM ${table} WHERE id = ?`,
+          [entityId],
+        );
+      }
+
+      const hasNewerLocalRow = existingRows.some(
+        (row) =>
+          row.updated_at &&
+          compareIsoTimestamps(String(row.updated_at), incomingTs) > 0,
       );
-      if (
-        existingRow?.updated_at &&
-        compareIsoTimestamps(String(existingRow.updated_at), incomingTs) > 0
-      ) {
+      if (hasNewerLocalRow) {
         continue;
       }
 
       if (isDeleteOp) {
         const delTs = String(payload.deleted_at ?? incomingTs);
-        this.db.run(
-          `UPDATE ${table} SET deleted_at = ?, updated_at = ? WHERE ${pkCol} = ?`,
-          [delTs, delTs, entityId],
-        );
+        syncedSet.delete(`${table}:${entityId}`);
+        for (const oldRow of existingRows) {
+          if (oldRow.id) {
+            syncedSet.delete(`${table}:${String(oldRow.id)}`);
+          }
+          if (oldRow.log_date) {
+            syncedSet.delete(`${table}:${String(oldRow.log_date)}`);
+          }
+        }
+        if (table === 'routine_logs') {
+          this.db.run(
+            `UPDATE routine_logs SET deleted_at = ?, updated_at = ?
+             WHERE id = ? OR (? IS NOT NULL AND ? IS NOT NULL AND routine_item_id = ? AND log_date = ?)`,
+            [delTs, delTs, entityId, rItemId, rLogDate, rItemId, rLogDate],
+          );
+        } else if (table === 'daily_checkins') {
+          if (cDate) {
+            syncedSet.delete(`daily_checkins:${cDate}`);
+          }
+          this.db.run(
+            `UPDATE daily_checkins SET deleted_at = ?, updated_at = ?
+             WHERE id = ? OR log_date = ? OR (? IS NOT NULL AND log_date = ?)`,
+            [delTs, delTs, entityId, entityId.slice(0, 10), cDate, cDate],
+          );
+        } else {
+          this.db.run(
+            `UPDATE ${table} SET deleted_at = ?, updated_at = ? WHERE id = ?`,
+            [delTs, delTs, entityId],
+          );
+        }
         appliedCount += 1;
         continue;
       }
+
+      syncedSet.add(`${table}:${entityId}`);
 
       const createdAt = String(payload.created_at ?? incomingTs);
       switch (table) {
@@ -2874,8 +3085,8 @@ export class MobileSqliteEngine {
           break;
         }
         case 'routine_logs': {
-          const routineItemId = String(payload.routine_item_id ?? '');
-          const logDate = String(payload.log_date ?? '').slice(0, 10);
+          const routineItemId = String(payload.routine_item_id ?? '').trim();
+          const logDate = String(payload.log_date ?? '').trim().slice(0, 10);
           if (
             !routineItemId ||
             !logDate ||
@@ -2883,11 +3094,52 @@ export class MobileSqliteEngine {
           ) {
             break;
           }
+
+          // Clean up superseded local natural-key IDs and remap any outbox references
+          for (const oldRow of existingRows) {
+            const oldId = String(oldRow.id ?? '');
+            if (oldId && oldId !== entityId) {
+              syncedSet.delete(`routine_logs:${oldId}`);
+              const outboxToRemap = this.queryAll(
+                `SELECT mutation_id, payload_json FROM sync_outbox WHERE entity_table = 'routine_logs' AND entity_id = ?`,
+                [oldId],
+              );
+              for (const ob of outboxToRemap) {
+                const obPayload = parseJsonSafe<Record<string, unknown>>(ob.payload_json, {});
+                obPayload.id = entityId;
+                this.db.run(
+                  `UPDATE sync_outbox SET entity_id = ?, payload_json = ? WHERE mutation_id = ?`,
+                  [entityId, JSON.stringify(obPayload), String(ob.mutation_id)],
+                );
+              }
+              for (const memOb of unpushedOutbox) {
+                if (memOb.entity_table === 'routine_logs' && memOb.entity_id === oldId) {
+                  memOb.entity_id = entityId;
+                  memOb.payload.id = entityId;
+                }
+              }
+            }
+          }
+
+          // Remove any stale duplicate row if both id = entityId and a distinct (routine_item_id, log_date) row coexist
+          const conflictingIdRow = this.queryOne(
+            `SELECT routine_item_id, log_date FROM routine_logs WHERE id = ?`,
+            [entityId],
+          );
+          if (
+            conflictingIdRow &&
+            (String(conflictingIdRow.routine_item_id) !== routineItemId ||
+              String(conflictingIdRow.log_date) !== logDate)
+          ) {
+            this.db.run(`DELETE FROM routine_logs WHERE id = ?`, [entityId]);
+          }
+
           this.db.run(
             `INSERT INTO routine_logs (
               id, routine_item_id, log_date, status, numeric_value, completed_at, notes, created_at, updated_at, deleted_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(routine_item_id, log_date) DO UPDATE SET
+              id = excluded.id,
               status = excluded.status,
               numeric_value = excluded.numeric_value,
               completed_at = excluded.completed_at,
@@ -2912,7 +3164,28 @@ export class MobileSqliteEngine {
           break;
         }
         case 'daily_checkins': {
-          const logDate = String(payload.log_date ?? entityId).slice(0, 10);
+          const logDate =
+            cDate ??
+            String(payload.checkin_date ?? payload.log_date ?? entityId)
+              .trim()
+              .slice(0, 10);
+          if (!logDate) {
+            break;
+          }
+          for (const oldRow of existingRows) {
+            const oldId = String(oldRow.id ?? '');
+            if (oldId && oldId !== entityId) {
+              syncedSet.delete(`daily_checkins:${oldId}`);
+            }
+          }
+          syncedSet.add(`daily_checkins:${logDate}`);
+
+          // Clear any stale duplicate row if id = entityId existed on a different log_date
+          this.db.run(`DELETE FROM daily_checkins WHERE id = ? AND log_date != ?`, [
+            entityId,
+            logDate,
+          ]);
+
           const safeEnergy =
             payload.energy_score !== null && payload.energy_score !== undefined
               ? clampPulseScore(Number(payload.energy_score))
@@ -2927,20 +3200,23 @@ export class MobileSqliteEngine {
               : null;
           this.db.run(
             `INSERT INTO daily_checkins (
-              log_date, day_profile_used, energy_score, mood_score, sleep_hours,
+              log_date, id, day_profile_used, energy_score, mood_score, sleep_hours,
               highlight, reflection_md, weekly_review_json, created_at, updated_at, deleted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(log_date) DO UPDATE SET
+              id = excluded.id,
               day_profile_used = excluded.day_profile_used,
               energy_score = excluded.energy_score,
               mood_score = excluded.mood_score,
               sleep_hours = excluded.sleep_hours,
               highlight = excluded.highlight,
               reflection_md = excluded.reflection_md,
+              weekly_review_json = COALESCE(excluded.weekly_review_json, daily_checkins.weekly_review_json),
               updated_at = excluded.updated_at,
               deleted_at = NULL`,
             [
               logDate,
+              entityId,
               String(payload.day_profile_used ?? 'workday'),
               safeEnergy,
               safeMood,

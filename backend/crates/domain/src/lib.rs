@@ -15,12 +15,28 @@ pub mod servers;
 pub mod sync;
 pub mod todos;
 
+pub mod intelligence {
+    pub use crate::agents::*;
+    pub use crate::hermes::*;
+}
+
+pub use agents::*;
+pub use auth::*;
+pub use courses::*;
+pub use dashboards::*;
 pub use error::{ApiError, ApiErrorBody};
 pub use events::SystemEvent;
+pub use finance::*;
+pub use goals::*;
+pub use hermes::*;
 pub use id::{
     MOBILE_SYNC_TABLES, SYSTEM_VERSION, cents_to_decimal, is_mobile_sync_table, is_uuid_v7,
     new_uuid_v7,
 };
+pub use routines::*;
+pub use servers::*;
+pub use sync::*;
+pub use todos::*;
 
 #[cfg(test)]
 mod tests {

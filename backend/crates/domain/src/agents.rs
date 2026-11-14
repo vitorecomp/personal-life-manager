@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::hermes::ChatToolCallDirective;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema, sqlx::Type)]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
@@ -36,10 +38,15 @@ impl Default for ArenaZone {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum SkillPolicyMode {
+    #[serde(alias = "read")]
     Read,
+    #[serde(alias = "approve")]
     Approve,
+    #[serde(alias = "auto")]
     Auto,
 }
+
+pub type AgentToolsPolicy = SkillPolicyMode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct KnightGridPos {
@@ -110,6 +117,10 @@ pub struct AgentWithTelemetry {
     pub ep_used_tokens: i32,
     pub ep_max_tokens: i32,
     pub ep_pct: f64,
+    #[serde(default)]
+    pub is_paused: bool,
+    #[serde(default)]
+    pub triggers: Vec<AgentTrigger>,
 }
 
 fn default_crest_color() -> String {
@@ -215,10 +226,24 @@ pub struct AgentRun {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct DispatchAgentRequest {
     pub dry_run: Option<bool>,
     pub sample_input: Option<String>,
+    #[serde(default)]
+    pub trigger_id: Option<Uuid>,
+    #[serde(default)]
+    pub tool_call: Option<ChatToolCallDirective>,
+    #[serde(default)]
+    pub estimated_cost_cents: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+pub struct AgentRunFilter {
+    pub agent_id: Option<Uuid>,
+    pub status: Option<AgentRunStatus>,
+    pub is_dry_run: Option<bool>,
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]

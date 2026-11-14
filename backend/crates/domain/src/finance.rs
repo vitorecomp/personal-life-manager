@@ -11,10 +11,14 @@ use uuid::Uuid;
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum AssetClass {
+    #[serde(alias = "br_equities")]
     BrEquity,
+    #[serde(alias = "br_fiis")]
     BrFii,
     BrFixedIncome,
+    #[serde(alias = "us_equities")]
     UsEquity,
+    #[serde(alias = "global_etfs")]
     GlobalEtf,
     Crypto,
     Cash,

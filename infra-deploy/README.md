@@ -1,48 +1,58 @@
-# Infrastructure & Deployment
+# Infrastructure & Deployment (`HERMES // OS`)
 
-This directory contains container definitions, compose orchestrators, and deployment scripts for running the complete **Second Brain** platform.
+This directory contains multi-stage container definitions, compose orchestrators, and database initialization scripts for running the unified **`HERMES // OS`** Second Brain & Life Operations platform.
 
 ---
 
 ## 📦 Services Overview
 
-The unified compose stack runs 4 core services:
-1. **`postgres`** (`pgvector/pgvector:pg16` on port `5432`): High-dimensional semantic embeddings and relational storage.
-2. **`redis`** (`redis:7-alpine` on port `6379`): Fast task queue and crawler cache.
-3. **`personal-backend`** (Golang on port `8080`): Time session tracking, task administration, and background server health prober.
-4. **`personal-frontend`** (Next.js on port `3000`): Full interactive dashboard UI for administering time, tasks, and servers.
+The unified compose stack (`name: hermes-os`) runs 3 core services:
+1. **`postgres`** (`docker.io/pgvector/pgvector:pg16` on port `5432`): Primary PostgreSQL 16 relational store with `pgvector` automatically enabled on first boot via `initdb/01-pgvector.sql` (`user: hermes`, `db: hermes_os`).
+2. **`redis`** (`docker.io/library/redis:7-alpine` on port `6379`): In-memory cache, quote/FX buffer, and background event coordination.
+3. **`hermes-server`** (multi-stage Rust `1.95` + Vite React CSR build on port `8080`): Unified Axum HTTP/SSE server hosting `/api/*`, `/mcp` (`rmcp` Streamable HTTP), `/api/openapi.json`, and the compiled 100% client-rendered Web SPA (`apps/web/dist`), mounting `./data:/app/data` for read-only crawler SQLite/Markdown imports and Obsidian Second Brain vault exports.
 
 ---
 
-## 🚀 Running Everything with Podman
+## 🚀 Running with Podman or Docker
 
-From the project root:
+### Local Development (Database & Cache Only)
+From the repository root:
 ```bash
-# Build and start all services in the background
+# Start PostgreSQL 16 (pgvector) and Redis 7 in the background
+podman-compose up -d postgres redis
+
+# Check container health
+podman-compose ps
+```
+
+### Full Production Stack
+From the repository root:
+```bash
+# Build and start postgres, redis, and unified hermes-server
 podman-compose up -d
 
-# Check running status
-podman-compose ps
+# Tail unified server logs
+podman-compose logs -f hermes-server
 
-# View container logs
-podman-compose logs -f
-
-# Stop all services
+# Stop stack
 podman-compose down
 ```
 
-Or deploy directly from `infra-deploy/`:
+Or deploy directly from `infra-deploy/` (explicitly pass `-f` so a single compose file is loaded):
 ```bash
 cd infra-deploy
-podman-compose up -d
+podman-compose -f podman-compose.yml up -d
+# or with Docker Engine:
+docker compose -f docker-compose.yml up -d
 ```
 
 ---
 
 ## 🌐 Endpoints
 
-- **Web Dashboard**: [http://localhost:3000](http://localhost:3000)
-- **Golang API**: [http://localhost:8080](http://localhost:8080)
-- **API Health Check**: [http://localhost:8080/api/health](http://localhost:8080/api/health)
-- **PostgreSQL**: `localhost:5432`
-- **Redis**: `localhost:6379`
+- **Web SPA & Unified Server**: `http://localhost:8080`
+- **API Health Check**: `http://localhost:8080/api/health`
+- **OpenAPI 3.1 Spec**: `http://localhost:8080/api/openapi.json`
+- **MCP Server (`rmcp`)**: `http://localhost:8080/mcp`
+- **PostgreSQL 16 (`pgvector`)**: `127.0.0.1:5432` (`hermes_os`)
+- **Redis 7**: `127.0.0.1:6379`

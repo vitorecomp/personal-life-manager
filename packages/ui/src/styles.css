@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  --fui-bg-carbon: #08080B;
+  --fui-bg-plum: #0D0716;
+  --fui-bg-blueprint: #10171D;
+  --fui-bg-panel: #13151A;
+  --fui-bg-arena: #141526;
+  --fui-accent-orange: #F87C18;
+  --fui-accent-vermilion: #EB4511;
+  --fui-accent-amber: #F59E0B;
+  --fui-accent-cyan: #2CE5F2;
+  --fui-accent-phosphor: #A8F040;
+  --fui-ink-stark: #F6F6F4;
+}
+
+*,
+*::before,
+*::after {
+  border-radius: 0px;
+}

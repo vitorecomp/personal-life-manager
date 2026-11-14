@@ -1,0 +1,14 @@
+[package]
+name = "hermes-intelligence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "hermes_intelligence"
+path = "src/lib.rs"
+
+[dependencies]
+hermes-domain.workspace = true
+hermes-life-ops.workspace = true

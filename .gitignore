@@ -3,27 +3,47 @@
 .env.*
 !.env.example
 
-# Local data (second brain clone, crawler output, SQLite files); only the folder skeleton is tracked
-/data/*
-!/data/*/
-/data/*/*
-!/data/*/.gitkeep
+# Agent / Teamwork workspace metadata
+.agents/
 
-# Dependency directories
+# Local private data (Obsidian second-brain vault, crawler output, SQLite databases)
+# Strictly untracked: git ls-files data/ must always be empty
+/data/
+
+# Rust / Cargo build artifacts
+/target/
+**/target/
+
+# Node / pnpm workspace dependencies & caches
 node_modules/
+.pnpm-store/
+*.tsbuildinfo
+.vite/
+coverage/
+
+# Frontend, Mobile & Shared Package build outputs
+/dist/
+/build/
+apps/web/dist/
+apps/mobile/dist/
+apps/*/dist/
+packages/*/dist/
+apps/mobile/android/
+apps/mobile/ios/
+
+# E2E isolated workspace artifacts (e2e/ source remains trackable)
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+e2e/dist/
+
+# Python crawler virtualenvs & bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
-
-# Build artifacts
-dist/
-build/
 *.egg-info/
-bin/
-server
-personal-system/backend/data/*.json
 
 # Logs
 *.log
@@ -36,13 +56,22 @@ Thumbs.db
 *.pem
 *.key
 *.p12
+*.pfx
 id_rsa*
 id_ed25519*
+id_ecdsa*
 cookies*.txt
 rclone.conf
 client_secret*.json
 credentials*.json
 *.sqlite
 *.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.bundle
 

@@ -1,73 +1,54 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-A detailed contributor guide lives in [AGENTS.md](AGENTS.md) (module responsibilities, code standards, crawler data contracts). This file summarizes what you need most often; AGENTS.md is authoritative for anything not covered here.
+This file provides concise operational guidance when working in this repository. [AGENTS.md](./AGENTS.md) is the authoritative contributor guide, and [systems-requirements/README.md](./systems-requirements/README.md) holds the v1.0 specifications and visual reference atlas (`REF-01`–`REF-14`).
 
 ## What this repo is
 
-A polyglot monorepo for a personal "Second Brain" platform. Two largely independent halves:
+**`HERMES // OS`** is a personal daily-driver **Second Brain & Life Operations** monorepo comprising:
 
-1. **Knowledge pipeline** (mostly scaffolding today): `crawlers/` (Python) will push normalized documents into Redis; `hermes/` (Python) will consume them, embed into PostgreSQL + pgvector, and expose semantic search. `hermes/main.py` is currently a CLI stub (`--status`, `--query`).
-2. **Personal system** (fully implemented): `personal-system/backend` (Go 1.24, stdlib-only REST API on :8080) + `personal-system/frontend` (Next.js 16 / React 19 / Tailwind v4 dashboard on :3000) for tasks, time tracking, and server health monitoring.
-
-Important architectural fact: the Go backend does **not** use Postgres or Redis — it persists everything to a single JSON file via `internal/storage/file_store.go` (path from the `DATA_FILE` env var, default `data/store.json`). Postgres/pgvector and Redis exist for the hermes/crawlers pipeline.
-
-The stack is orchestrated by the root `podman-compose.yml` (postgres, redis, personal-backend, personal-frontend). `infra-deploy/` holds the infra-only compose definitions.
-
-`data/` is gitignored local data with three folders: `second-brain/` (clone of the private Obsidian vault, synced via `./scripts/download_brain.sh`), `knowledge-data/` (crawler output) and `database/` (SQLite files). Never track or commit anything under it.
+1. **`backend/` (Rust 2024 Cargo Workspace)**: 4 crates (`hermes-domain`, `hermes-life-ops`, `hermes-intelligence`, `hermes-server`) powered by Axum, Tokio, SQLx (`PostgreSQL 16 + pgvector`), and `Redis 7`. Exposes `/api/*` REST + SSE, `/api/openapi.json` (`utoipa`), a native Rust `/mcp` server (`rmcp`) across 7 Life Ops domains (`dashboards`, `todos`, `routines`, `goals`, `courses`, `finance`, `servers`), a streaming bridge to Nous Research's `hermes gateway` (`HERMES_GATEWAY_URL`, default `http://127.0.0.1:8642/v1`, with deterministic `offline_mock` fallback), and production static SPA hosting over `apps/web/dist` on `:8080`.
+2. **`packages/ui` & `packages/api-client`**: Shared `REF-02` `0px` rectilinear Tactical FUI design system (`#08080B` / `#F87C18` / `#F6F6F4`), pixelated `PNG + JSON` sprite renderers (`Frieren` & `Isometric Knights`), and OpenAPI 3.1 TypeScript SDK.
+3. **`apps/web`**: 100% client-rendered Vite + React 19 Web SPA (`apps/web/dist`) implementing Room Monitor (`/dashboard`, `/monitor`), Hermes Chat (`/hermes`), Agent Studio Knights (`/agents`), omnipresent `Cmd+J` Frieren, Todos (`/todos`), Routines (`/routines`), Yearly Goals (`/goals`), Courses (`/courses`), and Finance Operator (`/finance`).
+4. **`apps/mobile`**: Offline-first Capacitor + Vite React CSR mobile companion app strictly scoped to `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG` using local SQLite + `UUIDv7` `/api/sync/*` delta sync.
+5. **Preserved Subsystems & Local Data**: Python `crawlers/` (`youtube-lists`, `youtube-ai`, `youtube-clean`), `scripts/`, and `sub-systems/` remain intact. `data/` (`second-brain/`, `knowledge-data/`, `database/`) is strictly gitignored (`git ls-files data/` must always be empty).
 
 ## Commands
 
-### Full stack (repo root)
+### Container infrastructure (repo root)
 ```bash
-podman-compose up -d      # or: docker compose up -d
-podman-compose logs -f personal-backend
+podman-compose up -d postgres redis   # start PostgreSQL 16 (pgvector) + Redis 7 for local dev
+podman-compose up -d                  # full unified stack (postgres, redis, hermes-server on :8080)
+podman-compose logs -f hermes-server
 podman-compose down
 ```
 
-### Go backend (`personal-system/backend/`)
+### Rust backend (`backend/`)
 ```bash
-make run                  # go run ./cmd/server → http://localhost:8080
-make build                # builds bin/server
-make test                 # go test -v ./...
-go test -v ./internal/services/ -run TestName   # single test
+cd backend
+cargo check --workspace
+cargo test --workspace
+cargo run --bin server                # http://127.0.0.1:8080
 ```
 
-### Next.js frontend (`personal-system/frontend/`)
+### TypeScript workspace (repo root — always invoke `corepack pnpm@10.34.7`)
 ```bash
-npm install
-npm run dev               # Turbopack dev server → http://localhost:3000
-npm run build             # production build (use as the verification check)
-npm run lint              # eslint
+corepack pnpm@10.34.7 install
+corepack pnpm@10.34.7 -r typecheck
+corepack pnpm@10.34.7 -r test
+corepack pnpm@10.34.7 -r build
+corepack pnpm@10.34.7 --filter @hermes/web dev      # http://127.0.0.1:5173
+corepack pnpm@10.34.7 --filter @hermes/mobile dev   # http://127.0.0.1:5174
 ```
 
-### Hermes / vault sync (repo root)
+### Vault & Dropbox sync (repo root)
 ```bash
-python hermes/main.py --status
-python hermes/main.py --query "..."
-./scripts/download_brain.sh   # sync Obsidian vault into data/second-brain/ (needs OBSIDIAN_BRAIN_REPO_URL in .env)
+./scripts/download_brain.sh
+./scripts/sync_dropbox.sh status
 ```
 
-Before finishing a change, run the relevant check: `make test` for backend, `npm run build` or `npm run lint` for frontend.
+## Critical Rules & Conventions
 
-## Architecture notes
-
-### Go backend (`personal-system/backend/`)
-Layered stdlib-only design — request flow: `internal/handlers` (routes in `routes.go`, CORS/logging in `middleware.go`) → `internal/services` (business logic) → `internal/storage` (`Store` interface + `file_store.go`). `internal/models` holds pure domain types; `internal/config` reads env vars (`PORT`, `DATA_FILE`, `PROBE_INTERVAL_SECONDS`, `CORS_ORIGIN`).
-
-- Routing uses Go 1.22+ method matching (`mux.HandleFunc("GET /api/tasks", ...)`). Don't introduce web frameworks.
-- Server health probing runs background goroutines on an interval; use context timeouts for probes and `sync.RWMutex` around shared state.
-
-### Next.js frontend (`personal-system/frontend/`)
-- App Router pages under `src/app/` (`tasks/`, `time/`, `servers/`). All API access goes through `src/lib/api.ts`, which reads `NEXT_PUBLIC_API_URL` (default `http://localhost:8080`). Shared types live in `src/lib/types.ts` — keep them in sync with the Go models.
-- This is Next.js 16: APIs and conventions may differ from your training data. Check `personal-system/frontend/AGENTS.md` and `node_modules/next/dist/docs/` before writing non-trivial Next.js code.
-- Interactive components need `"use client"`. Follow the dark-theme Tailwind styling in `src/app/globals.css`.
-
-### Monorepo boundaries
-Modules communicate via REST or Redis queues — never by importing across module directories. Crawlers must emit the standard ingestion document schema defined in AGENTS.md §5.4.
-
-## Conventions
-
-- Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
-- Secrets go in `.env` (gitignored); document new env vars in `.env.example`.
+- **Toolchain invariants**: Always use `corepack pnpm@10.34.7` (`typescript: "~5.8.3"`). Avoid Rust crate features requiring `cmake` or `clang`/`aws-lc-sys`; use runtime `sqlx::query` / `sqlx::query_as` + `sqlx::migrate!`.
+- **Read-only crawler boundary**: Open `data/database/youtube-lists.sqlite` strictly with `SQLITE_OPEN_READ_ONLY`—never mutate crawler SQLite files.
+- **Tactical FUI & Mobile scope**: Enforce `border-radius: 0px` everywhere and `>= 12px` interactive font sizes; keep `apps/mobile` strictly limited to `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG`.
+- **Privacy & Git**: Never track or stage anything under `data/` (`git ls-files data/` must be empty). Secrets belong in `.env` (no inline `#` comments on active `KEY=value` lines); follow Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).

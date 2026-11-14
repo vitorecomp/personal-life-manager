@@ -1,2 +1,7 @@
+# HERMES // OS — Toolchain Configuration (mise)
+# System runtimes (rustc 1.95+, Node 24 LTS, corepack pnpm@10.34.7) can also be used directly.
+
 [tools]
-go = "latest"
+rust = "stable"
+node = "24"
+pnpm = "10.34.7"

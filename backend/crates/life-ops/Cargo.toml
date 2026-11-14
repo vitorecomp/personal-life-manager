@@ -1,0 +1,13 @@
+[package]
+name = "hermes-life-ops"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "hermes_life_ops"
+path = "src/lib.rs"
+
+[dependencies]
+hermes-domain.workspace = true

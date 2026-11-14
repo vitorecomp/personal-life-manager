@@ -1,185 +1,168 @@
-# 🤖 AGENTS.md — Agent & Contributor Guide
+# 🤖 AGENTS.md — Agent & Contributor Guide (`HERMES // OS`)
 
-Welcome to the **Personal Life Manager (Second Brain)** repository. This document establishes technical context, architectural standards, development workflows, and operational rules for AI agents and human contributors working within this codebase.
+Welcome to the **`HERMES // OS` — Personal Life Manager (Second Brain)** repository. This document establishes technical context, architectural standards, development workflows, and operational rules for AI agents and human contributors working within this codebase.
 
 ---
 
 ## 📌 1. Project Overview & Philosophy
 
-The **Personal Life Manager** is a modular, automated **Second Brain** platform engineered to:
-1. **Capture** external knowledge, bookmarks, RSS feeds, and personal notes.
-2. **Synthesize** intelligence using vector search, embeddings, and LLM reasoning.
-3. **Administer** life operations: time tracking, task workflows, goal tracking, and server infrastructure health.
-4. **Automate** background tasks, game simulations, and routine maintenance.
-
-The architecture is guided by the **CODE** methodology (**Capture, Organize, Distill, Express**) adapted for automated systems and AI agents:
-- **Capture**: Automated ingestion workers (`crawlers/`) and manual inputs.
-- **Organize**: Structured life operations (`personal-system/`) and markdown taxonomy.
-- **Distill**: LLM summarization and vector semantic search (`hermes/`).
-- **Express**: Actionable task execution, time blocks, and routine reviews.
+**`HERMES // OS`** is a daily-driver **Second Brain & Life Operations** system engineered to:
+1. **Capture** external knowledge, playlists, notes, and quick-capture action items (`crawlers/`, Web `Cmd+K`, and Mobile Companion).
+2. **Organize** structured life operations across todos, routines, OKR goals, courses, multi-market finance, and server infrastructure (`backend/crates/life-ops`, `apps/web`, `apps/mobile`, `data/second-brain/`).
+3. **Distill** intelligence through Nous Research's `hermes gateway` (`http://127.0.0.1:8642/v1`), semantic `pgvector` retrieval, YouTube AI note distillation (`crawlers/youtube-ai`), and the native Rust `/mcp` tool server (`backend/crates/intelligence`).
+4. **Express** actionable execution via the Multi-Dashboard Room Monitor (`/dashboard`, `/monitor`), Pomodoro/Stopwatch Focus Timer, `Q1–Q4` Yearly Blueprint, and Weekly Markdown Vault Reviews.
 
 ---
 
 ## 🏗️ 2. Repository Architecture & Layout
 
-This repository is organized as a polyglot monorepo with distinct module boundaries:
+This repository is organized as a polyglot Rust + TypeScript + Python monorepo with strict module boundaries:
 
-```
+```text
 personal-life-manager/
-├── crawlers/              # Web scrapers, RSS ingestion, and content fetchers (Python)
-├── documentation/         # System architecture, data flow, and methodology docs
-├── hermes/                # Core AI engine: vector indexing, LLM orchestration, search API (Python)
-├── infra-deploy/          # Compose definitions (PostgreSQL + pgvector, Redis) & deploy scripts
-├── personal-system/       # Life operations full-stack application & markdown trackers
-│   ├── backend/           # Lightweight Golang REST API (Tasks, Time, Server health)
-│   ├── frontend/          # Next.js 16 + React 19 + Tailwind CSS dashboard UI
-│   ├── goals/             # Goal templates and trackers
-│   ├── routines/          # Weekly/daily routine checklists
-│   └── logs/              # Historical daily logs
-├── scripts/               # Automation scripts (e.g. syncing Obsidian markdown vault)
-├── sub-systems/           # Standalone bots and game automations (auto-players, satisfatory-plan)
-├── data/                  # [GITIGNORED] Local data
-│   ├── second-brain/      # Clone of the Obsidian Second Brain markdown vault
-│   ├── knowledge-data/    # Crawler output (Markdown notes)
-│   └── database/          # SQLite files used by the crawlers
-├── mise.toml              # Tool version manager configuration (Go)
-├── podman-compose.yml     # Root orchestrator for multi-container stack
-└── README.md              # Project overview and quickstart
+├── backend/                     # Unified multi-crate Rust 2024 Cargo workspace
+│   ├── crates/
+│   │   ├── domain/              # Pure models, UUIDv7 IDs, i64 cents, Decimal, utoipa OpenAPI schemas
+│   │   ├── life-ops/            # SQLx (PostgreSQL 16 + pgvector) repos & Life Ops engines (03, 07-11, Auth, Sync)
+│   │   ├── intelligence/        # hermes gateway SSE/runs client, rmcp /mcp server, Knights runner, Vault watcher
+│   │   └── server/              # Axum HTTP/SSE binary (:8080), /api/*, /mcp, and ServeDir over apps/web/dist
+│   └── migrations/              # SQLx PostgreSQL 16 + pgvector schema & seed migrations
+├── packages/
+│   ├── api-client/              # @hermes/api-client — OpenAPI 3.1 generated TypeScript SDK & TanStack Query hooks
+│   └── ui/                      # @hermes/ui — REF-02 0px Tactical FUI design system, charts, HUD loaders & sprites
+├── apps/
+│   ├── web/                     # @hermes/web — 100% client-rendered Vite + React 19 Web SPA (-> apps/web/dist)
+│   └── mobile/                  # @hermes/mobile — Capacitor + Vite React CSR offline-first SQLite companion app
+├── crawlers/                    # Python data collectors (youtube-lists, youtube-ai, youtube-clean)
+├── infra-deploy/                # Multi-stage Dockerfile, Compose files, and initdb/01-pgvector.sql
+├── scripts/                     # Vault & Dropbox sync scripts (download_brain.sh, sync_dropbox.sh, git-hooks/)
+├── sub-systems/                 # Standalone bots and calculation tools (auto-players, satisfatory-plan)
+├── systems-requirements/        # Authoritative v1.0 specifications (01-12) and visual reference atlas (REF-01..14)
+├── documentation/               # High-level architecture and CODE methodology guides
+├── data/                        # [GITIGNORED — ZERO TRACKED FILES] Local private data
+│   ├── second-brain/            # Clone of the Obsidian Second Brain Markdown vault
+│   ├── knowledge-data/          # Crawler Markdown notes (e.g. lists/youtube/)
+│   └── database/                # Crawler SQLite databases (e.g. youtube-lists.sqlite)
+├── mise.toml                    # Toolchain manager config (Rust, Node 24, pnpm 10.34.7)
+├── package.json                 # Root pnpm@10.34.7 workspace manifest
+├── pnpm-workspace.yaml          # Workspace globs (apps/*, packages/*)
+└── podman-compose.yml           # Root orchestrator (postgres, redis, hermes-server)
 ```
 
 ### Module Responsibilities & Tech Stacks
 
 | Module | Primary Language / Stack | Role & Purpose | Key Entrypoints / Specs |
 | :--- | :--- | :--- | :--- |
-| **`personal-system/backend`** | Go 1.24 (`net/http`) | High-performance REST API for task workflows, timer/time sessions, and concurrent TCP/HTTP server health probing. | `cmd/server/main.go`, `Makefile` |
-| **`personal-system/frontend`** | Next.js 16 (App Router), React 19, TypeScript 5, Tailwind CSS v4 | Interactive administrative UI dashboard for tasks, stopwatch/time blocking, and server monitoring. | `src/app/page.tsx`, `src/lib/api.ts` |
-| **`hermes`** | Python 3 | Intelligence core: document embeddings, pgvector retrieval, LLM summarization, and query interface. | `hermes/main.py` |
-| **`crawlers`** | Python 3 | Background data collectors for RSS, web bookmarks, and articles emitting standardized JSON schemas. | `crawlers/template_crawler.py` |
-| **`infra-deploy`** | Compose / Podman / Docker | PostgreSQL 16 (`pgvector/pgvector:pg16`), Redis 7 (`redis:7-alpine`), and container configs. | `infra-deploy/docker-compose.yml` |
-| **`sub-systems`** | Node.js / Python / Shell | Standalone automation sub-systems (e.g., game bots, calculation tools). | `sub-systems/satisfatory-plan/` |
-| **`scripts`** | Bash / Shell | Utility scripts such as `./scripts/download_brain.sh` to synchronize the personal Obsidian vault. | `scripts/download_brain.sh` |
+| **`backend/`** | Rust `1.95` (`2024` edition), Axum, Tokio, SQLx, `rmcp`, `utoipa` | Unified REST + SSE API, `/mcp` Streamable HTTP server (7 Life Ops domains), `hermes gateway` bridge, and static SPA server. | `backend/Cargo.toml`, `backend/crates/server/src/main.rs` |
+| **`packages/ui`** | TypeScript `~5.8.3`, React 19, Tailwind CSS v4 | Shared `REF-02` `0px` rectilinear Tactical FUI tokens, HUD loaders (`REF-08`–`12`), charts (`REF-06`–`07`), and pixelated `PNG + JSON` sprite renderers (`REF-13`, `REF-14`). | `packages/ui/src/index.ts`, `packages/ui/src/styles.css` |
+| **`packages/api-client`** | TypeScript `~5.8.3`, `@hey-api/openapi-ts`, TanStack Query v5 | Shared OpenAPI 3.1 client SDK and query helpers consumed by both `apps/web` and `apps/mobile`. | `packages/api-client/src/index.ts` |
+| **`apps/web`** | Vite 7, React 19, TanStack Router, TanStack Query v5, Zustand | 100% client-rendered Web SPA covering Room Monitor (`03`), Hermes (`04`), Knights (`05`), Frieren (`06`), Todos (`07`), Routines (`08`), Goals (`09`), Courses (`10`), and Finance (`11`). | `apps/web/src/main.tsx`, `apps/web/vite.config.ts` |
+| **`apps/mobile`** | Capacitor 8, Vite 7, React 19, `@capacitor-community/sqlite`, `sql.js` | Offline-first companion app strictly scoped to `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG` with `UUIDv7` delta sync (`/api/sync/*`). | `apps/mobile/capacitor.config.ts`, `apps/mobile/src/App.tsx` |
+| **`crawlers/`** | Python 3 | YouTube playlist/transcript collectors (`youtube-lists`, `youtube-ai`, `youtube-clean`) and standardized content crawlers. | `crawlers/README.md`, `crawlers/template_crawler.py` |
+| **`infra-deploy/`** | Podman / Docker Compose | PostgreSQL 16 (`pgvector/pgvector:pg16`), Redis 7 (`redis:7-alpine`), and multi-stage `hermes-server` image. | `infra-deploy/Dockerfile`, `podman-compose.yml` |
+| **`scripts/`** | Bash / Python | Obsidian vault sync (`./scripts/download_brain.sh`), Dropbox sync (`./scripts/sync_dropbox.sh`), and secret-guard git hooks. | `scripts/README.md`, `scripts/git-hooks/pre-commit` |
 
 ---
 
-## ⚙️ 3. Development Environment & Tooling
+## ⚙️ 3. Development Environment & Host Rules
 
-- **Version Manager**: `mise` manages tool runtimes (`mise.toml`). System Go / Node / Python runtimes can also be used directly.
-- **Container Engine**: Podman & Podman Compose (or Docker & Docker Compose).
-- **Go**: Version 1.22+ (configured for Go 1.24).
-- **Node.js**: Version 20+ (with npm).
-- **Python**: Version 3.10+.
+- **Rust**: `rustc` / `cargo` `1.95+` (`edition = "2024"`, `resolver = "3"`).
+  - Avoid crate features requiring `cmake` or `clang`/`bindgen`/`aws-lc-sys` (use `rustls` with `ring` or system OpenSSL; never enable `rmcp` `auth-client-credentials-jwt`).
+  - Use `sqlx::migrate!("../../migrations")` + runtime `sqlx::query` / `sqlx::query_as` (`FromRow`) rather than compile-time `sqlx::query!` macros.
+- **Node.js & pnpm**: Node.js `24` LTS + **`corepack pnpm@10.34.7`** (`"packageManager": "pnpm@10.34.7"`, `typescript: "~5.8.3"`). Always invoke `corepack pnpm@10.34.7` rather than unpinned `pnpm`.
+- **Containers**: Rootless `podman` & `podman-compose` (or Docker Compose) running PostgreSQL 16 (`:5432`) and Redis 7 (`:6379`).
+- **Python**: Python `3.10+` for `crawlers/` and `scripts/git-hooks/pre-commit`.
 
 ---
 
 ## 🚀 4. Common Commands & Workflows
 
-### 4.1. Infrastructure & Full-Stack Orchestration (Podman / Docker)
+### 4.1. Infrastructure & Container Stack (Podman / Docker)
 
 From the repository root:
 ```bash
-# Start all services (Postgres + pgvector, Redis, Backend, Frontend)
+# Start PostgreSQL 16 (pgvector) and Redis 7 for local development
+podman-compose up -d postgres redis
+
+# Build and start full unified stack (postgres, redis, hermes-server on :8080)
 podman-compose up -d
 
 # Check container health and status
 podman-compose ps
 
-# View unified logs
-podman-compose logs -f
+# Tail unified server logs
+podman-compose logs -f hermes-server
 
-# View logs for a specific service
-podman-compose logs -f personal-backend
-podman-compose logs -f personal-frontend
-
-# Teardown the stack
+# Stop stack
 podman-compose down
 ```
 
-*Note: Replace `podman-compose` with `docker compose` if running Docker.*
+### 4.2. Rust Backend (`backend/`)
 
-### 4.2. Personal System - Backend (Go)
-
-Working directory: `personal-system/backend`
+Working directory: `backend`
 ```bash
-# Run server locally (starts at http://localhost:8080)
-make run
-# or: go run ./cmd/server
+# Typecheck all 4 workspace crates (domain, life-ops, intelligence, server)
+cargo check --workspace
 
-# Build production binary to bin/server
-make build
+# Run unit and integration tests across workspace
+cargo test --workspace
 
-# Run unit and integration tests
-make test
-# or: go test -v ./...
-
-# Clean build artifacts
-make clean
+# Run unified server locally (http://127.0.0.1:8080)
+cargo run --bin server
 ```
 
-### 4.3. Personal System - Frontend (Next.js)
-
-Working directory: `personal-system/frontend`
-```bash
-# Install dependencies
-npm install
-
-# Start development server with Turbopack (http://localhost:3000)
-npm run dev
-
-# Run production build
-npm run build
-
-# Run linter
-npm run lint
-```
-
-### 4.4. Intelligence Core (Hermes)
-
-Working directory: `hermes` (or project root)
-```bash
-# Check service status
-python hermes/main.py --status
-
-# Execute a semantic search query
-python hermes/main.py --query "Second brain architecture"
-```
-
-### 4.5. Obsidian Knowledge Vault Sync
+### 4.3. TypeScript Monorepo (`packages/*` & `apps/*`)
 
 From the repository root:
 ```bash
-# Synchronize Obsidian vault into gitignored data/second-brain/ directory
+# Install workspace dependencies with locked pnpm version
+corepack pnpm@10.34.7 install
+
+# Typecheck, test, and build all workspace packages/apps
+corepack pnpm@10.34.7 -r typecheck
+corepack pnpm@10.34.7 -r test
+corepack pnpm@10.34.7 -r build
+
+# Start Web SPA Vite HMR dev server (http://127.0.0.1:5173, proxies /api & /mcp -> :8080)
+corepack pnpm@10.34.7 --filter @hermes/web dev
+
+# Start Mobile Companion Vite dev server (http://127.0.0.1:5174)
+corepack pnpm@10.34.7 --filter @hermes/mobile dev
+```
+
+### 4.4. Obsidian Vault & Dropbox Sync
+
+From the repository root:
+```bash
+# Synchronize private Obsidian vault into gitignored data/second-brain/
 ./scripts/download_brain.sh
+
+# Push/pull local data/ with Dropbox via rclone
+./scripts/sync_dropbox.sh status
 ```
 
 ---
 
 ## 📐 5. Code Standards & Architecture Guidelines
 
-### 5.1. General Monorepo Boundaries
-- **Keep modules decoupled**: Sub-systems and crawlers should interact with Hermes and the Personal System via well-defined REST endpoints or message queues (Redis), not by tightly coupling internal directory paths.
-- **No monolithic cross-imports**: Backend Go code should remain completely independent of frontend Node packages. Hermes Python scripts should communicate via standard data contracts.
+### 5.1. Rust Backend Guidelines (`backend/`)
+- **Crate Boundaries**:
+  - `hermes-domain`: Pure domain structs/enums, `UUIDv7` identifiers, `i64` integer cent money values, `rust_decimal::Decimal` quantities/rates, `utoipa::ToSchema` types, and broadcast event payloads.
+  - `hermes-life-ops`: PostgreSQL + `pgvector` repositories, `SHA-256` PAT auth (`plm_pat_...`), 8-table mobile delta sync (`sync_change_log`), concurrent Tokio TCP (`3s`)/HTTP (`4s`) Server Prober, Obsidian Markdown export, and **strictly read-only** (`SQLITE_OPEN_READ_ONLY`) `youtube-lists.sqlite` imports.
+  - `hermes-intelligence`: `hermes gateway` (`HERMES_GATEWAY_URL`, `X-Hermes-Session-Key`) streaming client with deterministic `offline_mock` fallback when `:8642` is offline, native Rust `/mcp` server (`rmcp`) exposing all 7 Life Ops domains under 3-tier write autonomy (`READ`, `IMMEDIATE_UNDO`, `REQUIRE_APPROVAL`), and Knight scheduler.
+  - `hermes-server`: Axum router (`/api/*`, `/mcp`, `/api/openapi.json`) and `tower-http::services::ServeDir` static hosting over `STATIC_DIST_DIR` (`apps/web/dist`) with SPA `index.html` fallback.
 
-### 5.2. Golang Backend Guidelines (`personal-system/backend`)
-- **Package Architecture**:
-  - `cmd/server/`: Main application entry point and signal lifecycle.
-  - `internal/config/`: Environment variable and configuration loading.
-  - `internal/models/`: Pure domain types and JSON serialization schemas.
-  - `internal/storage/`: Data persistence interfaces and implementations (e.g. `file_store.go`).
-  - `internal/services/`: Core business logic (tasks, time tracking, server probing).
-  - `internal/handlers/`: HTTP handlers, middlewares, and route registrations.
-- **Routing**: Use Go 1.22+ standard library HTTP routing (`http.NewServeMux()` with HTTP method matching: `mux.HandleFunc("GET /api/tasks", ...)`). Avoid introducing heavy external web frameworks unless strictly requested.
-- **Concurrency & Resilience**: Server health probing uses goroutines and context timeouts. Ensure all background operations use appropriate cancellation contexts and mutexes (`sync.RWMutex`) to prevent race conditions.
-- **Testing**: Write unit tests for services and store implementations using standard `testing` package.
+### 5.2. Web SPA & Mobile Companion Guidelines (`packages/*`, `apps/*`)
+- **100% Client-Side Rendering (CSR)**: Both `apps/web` and `apps/mobile` compile via Vite into pure client-rendered static bundles (`dist/index.html` + hashed assets) with zero SSR runtime.
+- **Tactical FUI Design Language (`REF-02`)**:
+  - Enforce `border-radius: 0px` across all panels, buttons, inputs, modals, badges, and charts.
+  - Core palette: `#08080B` (carbon ground), `#F87C18` (blaze orange accent), `#F6F6F4` (stark white ink), `#2CE5F2` (cyan telemetry), `#A8F040` (phosphor nominal).
+  - Interactive controls maintain a `>= 12px` computed font-size floor; pixel-art sprites (`<CompanionStage />` Frieren & Isometric Knights) render from `PNG + JSON` descriptors with integer zoom and `image-rendering: pixelated`.
+- **Strict Mobile Scope (`02-companion-app.md`)**: `apps/mobile` exposes **only** `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG`—never include routes or views for Web-only modules (`03`, `04`, `05`, `09`, `10`, `11`).
 
-### 5.3. Next.js Frontend Guidelines (`personal-system/frontend`)
-- **App Router & React 19**: This project uses Next.js 16 with the App Router and React 19. Be aware of Next.js 16 breaking changes and API conventions (see `personal-system/frontend/AGENTS.md` and `node_modules/next/dist/docs/`).
-- **Client vs. Server Components**: Mark interactive components and pages containing React hooks (`useState`, `useEffect`, event listeners) with `"use client"` at the top.
-- **Clean Effects**: Avoid synchronous `setState` calls directly within `useEffect` bodies that trigger cascading renders. Encapsulate data fetching cleanly or use async handlers.
-- **TypeScript**: Ensure strict typing. Avoid `any` types; define and export shared models in `src/lib/types.ts`.
-- **Styling**: Use Tailwind CSS utility classes adhering to the dark-theme design language established in `src/app/globals.css`.
-
-### 5.4. Crawlers & Document Contracts (`crawlers/`)
-- All crawler implementations must normalize captured data into the standard ingestion document schema before queueing:
+### 5.3. Crawlers & Document Contracts (`crawlers/`)
+- Preserve existing `crawlers/youtube-lists`, `crawlers/youtube-ai`, and `crawlers/youtube-clean` workflows untouched. Backend Course Tracker reads `data/database/youtube-lists.sqlite` strictly via `SQLITE_OPEN_READ_ONLY` (never creating or mutating crawler SQLite files) alongside Markdown notes in `data/knowledge-data/lists/youtube/`.
+- Generic web/RSS crawlers normalize captured documents into the standard ingestion schema:
 ```json
 {
   "id": "urn:source:unique-id",
@@ -202,20 +185,13 @@ From the repository root:
 
 ## 🔒 6. Privacy, Security & Git Conventions
 
-1. **Obsidian Vault Privacy**:
-   - The `data/` directory holds private Obsidian notes, crawler output and SQLite files. It is strictly listed in `.gitignore`.
-   - **Never** add, track, or commit files from `data/` to Git.
+1. **Strict `data/` Zero-Tracking Privacy**:
+   - `data/` (`second-brain/`, `knowledge-data/`, `database/`) holds private Obsidian notes, crawler outputs, and SQLite databases and is ignored via `/data/` in `.gitignore` (`.agents/` is also gitignored).
+   - **Never** add, stage, or commit any file inside `data/` (`git ls-files data/` must always output zero lines).
 2. **Environment & Secrets**:
-   - Environment secrets belong in `.env`.
-   - `.env` and `.env.*` are ignored by Git. Only commit `.env.example`.
-   - When introducing new environment variables, document them in `.env.example`.
+   - Secrets belong only in `.env` (gitignored). Never place inline `#` comments on active `KEY=value` lines in `.env` or `.env.example` (bash crawler/sync parsers read everything after `=`).
+   - Run `python3 scripts/git-hooks/pre-commit` (or configure `git config core.hooksPath scripts/git-hooks`) to block accidental secret or `.sqlite`/`.db` commits.
 3. **Commit Messages**:
-   - Follow the **Conventional Commits** specification:
-     - `feat: <description>` for new capabilities.
-     - `fix: <description>` for bug fixes.
-     - `docs: <description>` for documentation updates.
-     - `refactor: <description>` for restructuring code without behavioral change.
-     - `test: <description>` for adding or updating tests.
-     - `chore: <description>` for maintenance or dependency updates.
+   - Follow **Conventional Commits** (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
 4. **Verification Before Completion**:
-   - Before concluding any modification task, execute the relevant tests and checks (e.g., `make test` for backend, `npm run build` or `npm run lint` for frontend) to verify nothing is broken.
+   - Before concluding changes, verify `cd backend && cargo check --workspace && cargo test --workspace`, `corepack pnpm@10.34.7 -r typecheck && corepack pnpm@10.34.7 -r test && corepack pnpm@10.34.7 -r build`, and empty `git ls-files data/`.

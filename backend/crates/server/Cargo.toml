@@ -1,0 +1,20 @@
+[package]
+name = "hermes-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+default-run = "server"
+
+[lib]
+name = "hermes_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+hermes-domain.workspace = true
+hermes-life-ops.workspace = true
+hermes-intelligence.workspace = true

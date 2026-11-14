@@ -1,0 +1,12 @@
+[package]
+name = "hermes-domain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "hermes_domain"
+path = "src/lib.rs"
+
+[dependencies]

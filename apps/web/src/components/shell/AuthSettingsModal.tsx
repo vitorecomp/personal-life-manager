@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QRCodeSVG } from 'qrcode.react';
 import { FuiBadge, FuiButton, FuiInput, FuiPanelHeader, FUI_TOKENS } from '@hermes/ui';
@@ -29,6 +29,25 @@ export function AuthSettingsModal() {
   const [fallbackUrl, setFallbackUrl] = useState('');
   const [qrTokenName, setQrTokenName] = useState('Mobile Companion');
   const [pairingQr, setPairingQr] = useState<PairingQrResponse | null>(null);
+
+  // Clear one-time secrets on close and dismiss modal on Escape
+  useEffect(() => {
+    if (!open) {
+      setMintedPat(null);
+      setPairingQr(null);
+      setPatError(null);
+      setPassword('');
+      return undefined;
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, setOpen]);
 
   const { data: me } = useQuery({
     queryKey: ['auth-me'],

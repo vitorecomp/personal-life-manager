@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   FuiBadge,
@@ -20,11 +20,18 @@ export function HermesPage() {
   const queryClient = useQueryClient();
   const activeSessionKey = useAppStore((s) => s.activeSessionKey);
   const setActiveSessionKey = useAppStore((s) => s.setActiveSessionKey);
+  const setAssistantStreaming = useAppStore((s) => s.setAssistantStreaming);
 
   const [highLevelPlan, setHighLevelPlan] = useState(true);
   const [draft, setDraft] = useState('');
-  const [localReply, setLocalReply] = useState<string | null>(null);
+  const [localReply, setLocalReply] = useState<{ sessionKey: string; content: string } | null>(
+    null,
+  );
   const [isStreaming, setIsStreaming] = useState(false);
+
+  useEffect(() => {
+    setLocalReply(null);
+  }, [activeSessionKey]);
 
   const { data: sessions = [] } = useQuery({
     queryKey: ['hermes-sessions'],
@@ -56,27 +63,57 @@ export function HermesPage() {
   const messages: HermesMessageRecord[] =
     sessionDetail?.messages ?? sessionDetail?.messages_json ?? [];
 
+  const visibleLocalReply =
+    localReply &&
+    localReply.sessionKey === activeSessionKey &&
+    !messages.some((m) => m.role === 'assistant' && m.content.trim() === localReply.content.trim())
+      ? localReply.content
+      : null;
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = draft.trim();
     if (!trimmed) return;
+    const targetSessionKey = activeSessionKey;
     setDraft('');
     setIsStreaming(true);
+    setAssistantStreaming(true);
     try {
-      const reply = await streamHermesChat({
-        sessionKey: activeSessionKey,
-        message: trimmed,
-        origin: 'hermes_view',
-        highLevelMode: highLevelPlan,
-        pageContext: { active_route: '/hermes' },
-      });
-      setLocalReply(reply);
-      queryClient.invalidateQueries({ queryKey: ['hermes-session', activeSessionKey] });
+      let liveAccumulated = '';
+      const reply = await streamHermesChat(
+        {
+          sessionKey: targetSessionKey,
+          message: trimmed,
+          origin: 'hermes_view',
+          highLevelMode: highLevelPlan,
+          pageContext: { active_route: '/hermes' },
+        },
+        {
+          onToken: (delta) => {
+            liveAccumulated += delta;
+            setLocalReply({ sessionKey: targetSessionKey, content: liveAccumulated });
+          },
+        },
+      );
+      setLocalReply({ sessionKey: targetSessionKey, content: reply });
+      await queryClient.refetchQueries({ queryKey: ['hermes-session', targetSessionKey] });
+      const refreshed = queryClient.getQueryData<HermesSessionRecord | null>([
+        'hermes-session',
+        targetSessionKey,
+      ]);
+      const persisted = refreshed?.messages ?? refreshed?.messages_json ?? [];
+      if (Array.isArray(persisted) && persisted.length > 0) {
+        setLocalReply((prev) => (prev?.sessionKey === targetSessionKey ? null : prev));
+      }
       queryClient.invalidateQueries({ queryKey: ['hermes-sessions'] });
     } catch {
-      setLocalReply(`[OFFLINE_MOCK] Processed "${trimmed}" under session ${activeSessionKey}.`);
+      setLocalReply({
+        sessionKey: targetSessionKey,
+        content: `[OFFLINE_MOCK] Processed "${trimmed}" under session ${targetSessionKey}.`,
+      });
     } finally {
       setIsStreaming(false);
+      setAssistantStreaming(false);
     }
   };
 
@@ -214,7 +251,7 @@ export function HermesPage() {
                 <span>{m.content}</span>
               </div>
             ))}
-            {localReply && (
+            {visibleLocalReply && (
               <div
                 style={{
                   padding: '6px 8px',
@@ -223,7 +260,7 @@ export function HermesPage() {
                   fontSize: '13px',
                 }}
               >
-                {localReply}
+                {visibleLocalReply}
               </div>
             )}
           </div>

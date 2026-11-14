@@ -16,8 +16,35 @@ function formatClock(totalSeconds: number): string {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+type PomodoroPresetKey = 'pomodoro_25_5' | 'pomodoro_50_10' | 'pomodoro_90_15';
+
+const POMODORO_PRESETS: Record<
+  PomodoroPresetKey,
+  { work_minutes: number; break_minutes: number; shortLabel: string; badgeLabel: string }
+> = {
+  pomodoro_25_5: {
+    work_minutes: 25,
+    break_minutes: 5,
+    shortLabel: '25/5',
+    badgeLabel: 'POMODORO 25/5',
+  },
+  pomodoro_50_10: {
+    work_minutes: 50,
+    break_minutes: 10,
+    shortLabel: '50/10',
+    badgeLabel: 'POMODORO 50/10',
+  },
+  pomodoro_90_15: {
+    work_minutes: 90,
+    break_minutes: 15,
+    shortLabel: '90/15',
+    badgeLabel: 'POMODORO 90/15',
+  },
+};
+
 export function ActiveTimerBar() {
   const queryClient = useQueryClient();
+  const [pomodoroPreset, setPomodoroPreset] = useState<PomodoroPresetKey>('pomodoro_25_5');
 
   const { data: rawTimer } = useQuery({
     queryKey: ['active-timer'],
@@ -80,16 +107,29 @@ export function ActiveTimerBar() {
       (activeTaskId ? `TASK:${activeTaskId.slice(0, 8)}` : 'FOCUS_SESSION')
     : '';
 
-  const rawMode = String(session?.timer_mode ?? session?.mode ?? (rawTimer as any)?.mode ?? 'pomodoro').toLowerCase();
-  const modeLabel = rawMode.includes('stopwatch') ? 'STOPWATCH' : 'POMODORO';
+  const rawMode = String(
+    session?.timer_mode ?? session?.mode ?? (rawTimer as any)?.mode ?? 'pomodoro_25_5',
+  ).toLowerCase();
+  const modeLabel = rawMode.includes('stopwatch')
+    ? 'STOPWATCH'
+    : rawMode.includes('90_15') || Number(session?.work_minutes) === 90
+      ? 'POMODORO 90/15'
+      : rawMode.includes('50_10') || Number(session?.work_minutes) === 50
+        ? 'POMODORO 50/10'
+        : 'POMODORO 25/5';
 
   const startMutation = useMutation({
-    mutationFn: async (mode: 'pomodoro' | 'stopwatch') => {
+    mutationFn: async (targetMode: 'stopwatch' | PomodoroPresetKey) => {
+      if (targetMode === 'stopwatch') {
+        return apiPost('/api/time/timer/start', {
+          timer_mode: 'stopwatch',
+        });
+      }
+      const cfg = POMODORO_PRESETS[targetMode] ?? POMODORO_PRESETS.pomodoro_25_5;
       return apiPost('/api/time/timer/start', {
-        mode,
-        timer_mode: mode === 'stopwatch' ? 'stopwatch' : 'pomodoro_25_5',
-        work_minutes: 25,
-        break_minutes: 5,
+        timer_mode: targetMode,
+        work_minutes: cfg.work_minutes,
+        break_minutes: cfg.break_minutes,
       });
     },
     onSuccess: () => {
@@ -197,11 +237,30 @@ export function ActiveTimerBar() {
       ) : (
         <>
           <span style={{ color: FUI_TOKENS.inkMuted }}>TIMER // IDLE 00:00</span>
+          <select
+            data-testid="timer-pomodoro-preset"
+            aria-label="Pomodoro Preset"
+            value={pomodoroPreset}
+            onChange={(e) => setPomodoroPreset(e.target.value as PomodoroPresetKey)}
+            style={{
+              padding: '3px 6px',
+              fontSize: '12px',
+              fontFamily: FUI_TOKENS.fontMono,
+              backgroundColor: FUI_TOKENS.bgCarbon,
+              color: FUI_TOKENS.inkStark,
+              border: `1px solid ${FUI_TOKENS.borderHairline}`,
+              borderRadius: '0px',
+            }}
+          >
+            <option value="pomodoro_25_5">25/5</option>
+            <option value="pomodoro_50_10">50/10</option>
+            <option value="pomodoro_90_15">90/15</option>
+          </select>
           <FuiButton
             data-testid="timer-start-pomodoro-btn"
             variant="secondary"
             size="sm"
-            onClick={() => startMutation.mutate('pomodoro')}
+            onClick={() => startMutation.mutate(pomodoroPreset)}
           >
             ▶ POMODORO
           </FuiButton>

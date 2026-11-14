@@ -42,6 +42,7 @@ export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
   const setAuthModalOpen = useAppStore((s) => s.setAuthModalOpen);
   const companionOpen = useAppStore((s) => s.companionOpen);
   const setCompanionOpen = useAppStore((s) => s.setCompanionOpen);
+  const isAssistantStreaming = useAppStore((s) => s.isAssistantStreaming);
 
   const { data: health } = useQuery({
     queryKey: ['health'],
@@ -115,7 +116,7 @@ export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
             <SystemApertureLogo
               size={32}
               status={dbOnline ? 'online' : 'offline'}
-              isThinking={false}
+              isThinking={isAssistantStreaming}
               title="HERMES // OS System Aperture"
             />
             <div>
@@ -253,6 +254,7 @@ export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
         <FrierenCompanionController
           mode="ledge"
           pathname={pathname}
+          dbOnline={dbOnline}
           gatewayMode={gatewayMode}
           onNavigate={onNavigate}
         />
@@ -278,6 +280,7 @@ export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
       <FrierenCompanionController
         mode="popover"
         pathname={pathname}
+        dbOnline={dbOnline}
         gatewayMode={gatewayMode}
         onNavigate={onNavigate}
       />

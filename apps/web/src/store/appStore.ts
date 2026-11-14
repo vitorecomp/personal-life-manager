@@ -1,12 +1,17 @@
 import { create } from 'zustand';
 
-const SESSION_STORAGE_KEY = 'hermes-session-key';
+const ACTIVE_SESSION_STORAGE_KEY = 'hermes-active-session-key';
+const LEGACY_SESSION_STORAGE_KEY = 'hermes-session-key';
 const BOOT_COMPLETE_KEY = 'hermes-boot-complete';
 
 function readInitialSessionKey(): string {
   if (typeof window === 'undefined') return 'hermes-primary-session';
   try {
-    return window.localStorage.getItem(SESSION_STORAGE_KEY) || 'hermes-primary-session';
+    return (
+      window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY) ||
+      window.localStorage.getItem(LEGACY_SESSION_STORAGE_KEY) ||
+      'hermes-primary-session'
+    );
   } catch {
     return 'hermes-primary-session';
   }
@@ -38,6 +43,8 @@ export interface AppStoreState {
   selectedEntityId: string | null;
   selectedEntityLabel: string | null;
   setSelectedEntity: (id: string | null, label?: string | null) => void;
+  isAssistantStreaming: boolean;
+  setAssistantStreaming: (streaming: boolean) => void;
   bootDismissed: boolean;
   dismissBoot: () => void;
 }
@@ -48,7 +55,8 @@ export const useAppStore = create<AppStoreState>((set) => ({
     const clean = key.trim() || 'hermes-primary-session';
     if (typeof window !== 'undefined') {
       try {
-        window.localStorage.setItem(SESSION_STORAGE_KEY, clean);
+        window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, clean);
+        window.localStorage.setItem(LEGACY_SESSION_STORAGE_KEY, clean);
       } catch {
         // Ignore storage quota errors
       }
@@ -67,6 +75,8 @@ export const useAppStore = create<AppStoreState>((set) => ({
   selectedEntityLabel: null,
   setSelectedEntity: (id: string | null, label: string | null = null) =>
     set({ selectedEntityId: id, selectedEntityLabel: label }),
+  isAssistantStreaming: false,
+  setAssistantStreaming: (streaming: boolean) => set({ isAssistantStreaming: streaming }),
   bootDismissed: readInitialBootDismissed(),
   dismissBoot: () => {
     if (typeof window !== 'undefined') {

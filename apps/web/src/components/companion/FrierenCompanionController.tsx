@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CompanionStage,
+  type CompanionAnimationHint,
   type CompanionApprovalRequest,
   type CompanionChatMessage,
   type CompanionNudge,
@@ -21,13 +22,19 @@ import { useAppStore } from '../../store/appStore';
 
 export interface FrierenCompanionControllerProps {
   pathname: string;
+  dbOnline?: boolean;
   gatewayMode?: 'online' | 'offline_mock';
   onNavigate: (to: string) => void;
   mode: 'ledge' | 'popover';
 }
 
+interface ScopedCompanionMessage extends CompanionChatMessage {
+  sessionKey: string;
+}
+
 export function FrierenCompanionController({
   pathname,
+  dbOnline = true,
   gatewayMode = 'online',
   onNavigate,
   mode,
@@ -40,9 +47,16 @@ export function FrierenCompanionController({
   const activeDashboardId = useAppStore((s) => s.activeDashboardId);
   const selectedEntityId = useAppStore((s) => s.selectedEntityId);
   const selectedEntityLabel = useAppStore((s) => s.selectedEntityLabel);
+  const isAssistantStreaming = useAppStore((s) => s.isAssistantStreaming);
+  const setAssistantStreaming = useAppStore((s) => s.setAssistantStreaming);
 
-  const [localMessages, setLocalMessages] = useState<CompanionChatMessage[]>([]);
+  const [localMessages, setLocalMessages] = useState<ScopedCompanionMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+
+  // Clear local optimistic messages immediately when activeSessionKey changes
+  useEffect(() => {
+    setLocalMessages([]);
+  }, [activeSessionKey]);
 
   // Escape key closes the popover cleanly (Cmd+J / Ctrl+J is handled by CompanionStage mode="popover")
   useEffect(() => {
@@ -194,13 +208,22 @@ export function FrierenCompanionController({
       status: 'pending',
     }));
 
+  const nowMs = Date.now();
   const undoActions: CompanionUndoAction[] = rawUndos
-    .filter((u) => !u.reverted)
+    .filter((u) => {
+      if (!u || u.reverted) return false;
+      if (u.undone_at != null && String(u.undone_at).trim() !== '') return false;
+      if (u.expires_at) {
+        const expMs = Date.parse(String(u.expires_at));
+        if (!Number.isNaN(expMs) && expMs <= nowMs) return false;
+      }
+      return true;
+    })
     .map((u) => ({
       undoId: String(u.undo_id ?? u.id),
       toolName: String(u.tool_name || 'mcp_action'),
       summary: `${u.entity_table || 'entity'} modified`,
-      undone: Boolean(u.reverted),
+      undone: false,
     }));
 
   const serverMessages: CompanionChatMessage[] = (
@@ -214,8 +237,17 @@ export function FrierenCompanionController({
     thinkingText: m.thinking,
   }));
 
-  const combinedMessages =
-    localMessages.length > 0 ? [...serverMessages, ...localMessages] : serverMessages;
+  const scopedLocalMessages = localMessages
+    .filter((m) => m.sessionKey === activeSessionKey)
+    .filter((m) => {
+      if (m.isStreaming) return true;
+      return !serverMessages.some(
+        (srv) => srv.role === m.role && srv.content.trim() === m.content.trim(),
+      );
+    });
+
+  const combinedMessages: CompanionChatMessage[] =
+    scopedLocalMessages.length > 0 ? [...serverMessages, ...scopedLocalMessages] : serverMessages;
 
   const pageContext = {
     activeRoute: pathname,
@@ -225,11 +257,23 @@ export function FrierenCompanionController({
   };
 
   if (mode === 'ledge') {
+    const ledgeAnimation: CompanionAnimationHint =
+      isAssistantStreaming || isStreaming
+        ? 'cast_blue_flora'
+        : nudges.length > 0
+          ? 'walk_ledge'
+          : pathname.startsWith('/courses') ||
+              pathname.startsWith('/goals') ||
+              pathname.startsWith('/hermes')
+            ? 'read_grimoire'
+            : 'idle_ledge_sit';
+
     return (
       <CompanionStage
         mode="ledge"
-        online
+        online={dbOnline}
         gatewayMode={gatewayMode}
+        animation={ledgeAnimation}
         scale={2}
         nudges={nudges}
         open={companionOpen}
@@ -240,24 +284,34 @@ export function FrierenCompanionController({
   }
 
   const handleSendMessage = async (text: string) => {
-    const userMsg: CompanionChatMessage = {
+    const targetSessionKey = activeSessionKey;
+    const userMsg: ScopedCompanionMessage = {
       id: `usr-${Date.now()}`,
+      sessionKey: targetSessionKey,
       role: 'user',
       content: text,
     };
     const asstId = `asst-${Date.now() + 1}`;
     setLocalMessages((prev) => [
-      ...prev,
+      ...prev.filter((m) => m.sessionKey === targetSessionKey),
       userMsg,
-      { id: asstId, role: 'assistant', content: '...', isStreaming: true },
+      {
+        id: asstId,
+        sessionKey: targetSessionKey,
+        role: 'assistant',
+        content: '...',
+        isStreaming: true,
+      },
     ]);
     setIsStreaming(true);
+    setAssistantStreaming(true);
 
     try {
       let streamedText = '';
+      let streamedThinking = '';
       await streamHermesChat(
         {
-          sessionKey: activeSessionKey,
+          sessionKey: targetSessionKey,
           message: text,
           origin: 'frieren_popover',
           pageContext: {
@@ -267,22 +321,53 @@ export function FrierenCompanionController({
           },
         },
         {
+          onThinking: (thinkingText) => {
+            streamedThinking = thinkingText;
+            setLocalMessages((prev) =>
+              prev.map((m) =>
+                m.id === asstId ? { ...m, thinkingText: streamedThinking } : m,
+              ),
+            );
+          },
           onToken: (delta) => {
             streamedText += delta;
             setLocalMessages((prev) =>
               prev.map((m) => (m.id === asstId ? { ...m, content: streamedText } : m)),
             );
           },
+          onUndoAvailable: () => {
+            queryClient.invalidateQueries({ queryKey: ['mcp-undo'] });
+          },
+          onApprovalRequired: () => {
+            queryClient.invalidateQueries({ queryKey: ['mcp-approvals'] });
+          },
           onDone: (finalText) => {
             setLocalMessages((prev) =>
               prev.map((m) =>
-                m.id === asstId ? { ...m, content: finalText, isStreaming: false } : m,
+                m.id === asstId
+                  ? {
+                      ...m,
+                      content: finalText,
+                      thinkingText: streamedThinking || m.thinkingText,
+                      isStreaming: false,
+                    }
+                  : m,
               ),
             );
           },
         },
       );
-      queryClient.invalidateQueries({ queryKey: ['hermes-session', activeSessionKey] });
+
+      await queryClient.refetchQueries({ queryKey: ['hermes-session', targetSessionKey] });
+      const refreshed = queryClient.getQueryData<HermesSessionRecord | null>([
+        'hermes-session',
+        targetSessionKey,
+      ]);
+      const persisted = refreshed?.messages ?? refreshed?.messages_json ?? [];
+      if (Array.isArray(persisted) && persisted.length > 0) {
+        setLocalMessages((prev) => prev.filter((m) => m.sessionKey !== targetSessionKey));
+      }
+
       queryClient.invalidateQueries({ queryKey: ['mcp-undo'] });
       queryClient.invalidateQueries({ queryKey: ['mcp-approvals'] });
     } catch {
@@ -299,6 +384,7 @@ export function FrierenCompanionController({
       );
     } finally {
       setIsStreaming(false);
+      setAssistantStreaming(false);
     }
   };
 
@@ -306,7 +392,7 @@ export function FrierenCompanionController({
     <CompanionStage
       mode="popover"
       className="fixed bottom-4 right-4 z-50 w-[420px] max-w-[95vw]"
-      online
+      online={dbOnline}
       gatewayMode={gatewayMode}
       scale={2}
       sessionKey={activeSessionKey}

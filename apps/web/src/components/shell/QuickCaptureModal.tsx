@@ -3,7 +3,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { FuiBadge, FuiButton, FuiPanelHeader, FUI_TOKENS } from '@hermes/ui';
 import {
   apiPost,
+  normalizeTaskEnergyLevel,
   parseQuickCaptureFallback,
+  toRfc3339DueDate,
   type QuickCaptureParsed,
 } from '../../api/client';
 import { useAppStore } from '../../store/appStore';
@@ -63,17 +65,20 @@ export function QuickCaptureModal() {
       try {
         const res = await apiPost<any>('/api/tasks/parse', {
           raw_input: trimmed,
-          input: trimmed,
-          raw: trimmed,
-          text: trimmed,
         });
         if (!cancelled && res) {
           const data = res.data ?? res;
+          const rawTags = Array.isArray(data.tags) ? data.tags : localPreview.tags;
+          const dedupedTags = Array.from(
+            new Set(rawTags.map((t: any) => String(t).trim().toLowerCase()).filter(Boolean)),
+          );
           setParsed({
             ...localPreview,
             ...data,
             clean_title: String(data.clean_title ?? data.title ?? localPreview.clean_title),
-            tags: Array.isArray(data.tags) ? data.tags : localPreview.tags,
+            tags: dedupedTags,
+            energy_level:
+              normalizeTaskEnergyLevel(data.energy_level) ?? localPreview.energy_level,
           });
         }
       } catch {
@@ -106,9 +111,6 @@ export function QuickCaptureModal() {
       try {
         const parseRes = await apiPost<any>('/api/tasks/parse', {
           raw_input: trimmed,
-          input: trimmed,
-          raw: trimmed,
-          text: trimmed,
         });
         const data = parseRes?.data ?? parseRes;
         if (data && typeof data === 'object') {
@@ -130,14 +132,25 @@ export function QuickCaptureModal() {
         return;
       }
 
+      const uniqueTags = Array.from(
+        new Set(
+          (Array.isArray(resolved.tags) ? resolved.tags : [])
+            .map((t) => String(t).trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      );
+      const validEnergy = normalizeTaskEnergyLevel(resolved.energy_level);
+      const rfcDue = toRfc3339DueDate(resolved.due_at ?? resolved.scheduled_date);
+
       await apiPost('/api/tasks', {
         title: finalTitle,
         quick_capture: trimmed,
-        tags: resolved.tags,
+        tags: uniqueTags,
         priority: resolved.priority ?? 'medium',
-        energy_level: resolved.energy_level,
+        energy_level: validEnergy,
         scheduled_date: resolved.scheduled_date,
-        due_at: resolved.due_at ?? resolved.scheduled_date,
+        due_date: rfcDue,
+        due_at: rfcDue,
         estimated_minutes: resolved.estimated_minutes ?? resolved.estimate_minutes,
         status: resolved.status ?? 'todo',
       });
@@ -240,7 +253,7 @@ export function QuickCaptureModal() {
             {parsed ? (
               <>
                 <FuiBadge tone="stark">TITLE: {parsed.clean_title || parsed.title}</FuiBadge>
-                {parsed.tags.map((tag) => (
+                {Array.from(new Set(parsed.tags)).map((tag) => (
                   <FuiBadge key={tag} tone="orange">
                     #{tag}
                   </FuiBadge>

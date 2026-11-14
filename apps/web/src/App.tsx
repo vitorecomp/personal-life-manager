@@ -16,6 +16,14 @@ function normalizePathname(raw: string): string {
   return raw;
 }
 
+function safeDecodeURIComponent(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export interface AppRouterProps {
   initialPath?: string;
 }
@@ -66,7 +74,7 @@ export function AppRouter({ initialPath }: AppRouterProps) {
     }
     if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
       const slug = pathname.startsWith('/dashboard/')
-        ? decodeURIComponent(pathname.slice('/dashboard/'.length))
+        ? safeDecodeURIComponent(pathname.slice('/dashboard/'.length))
         : undefined;
       return <DashboardPage kioskMode={false} slug={slug} onNavigate={navigate} />;
     }

@@ -61,6 +61,11 @@ describe('HERMES // OS Web SPA — Sub-Milestone M4A (F23, F24, F27)', () => {
     render(<App initialPath="/dashboard" />);
 
     expect(screen.getByTestId('hermes-web-shell')).toBeTruthy();
+    expect(screen.getByTestId('app-shell-sidebar')).toBeTruthy();
+    const sidebarNav = within(screen.getByTestId('app-shell-sidebar')).getByRole('navigation', {
+      name: 'Primary Module Navigation',
+    });
+    expect(sidebarNav.style.flexDirection).toBe('column');
     expect(screen.getByText('HERMES // OS')).toBeTruthy();
     expect(document.querySelector('[data-fui="system-aperture-logo"]')).toBeTruthy();
     expect(document.querySelector('[data-fui="micro-anim-icon"]')).toBeTruthy();

@@ -151,61 +151,6 @@ export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
             </div>
           </div>
 
-          {/* Primary CSR Navigation */}
-          <nav
-            aria-label="Primary Module Navigation"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              gap: '4px',
-              borderRadius: '0px',
-            }}
-          >
-            {NAV_ITEMS.map((item) => {
-              const active =
-                pathname === item.path ||
-                (item.path !== '/dashboard' && pathname.startsWith(`${item.path}/`)) ||
-                (item.path === '/dashboard' && pathname.startsWith('/dashboard/'));
-              return (
-                <a
-                  key={item.path}
-                  href={item.path}
-                  data-testid={`nav-link-${item.label.toLowerCase()}`}
-                  onClick={(e) => {
-                    if (
-                      e.button === 0 &&
-                      !e.metaKey &&
-                      !e.ctrlKey &&
-                      !e.shiftKey &&
-                      !e.altKey
-                    ) {
-                      e.preventDefault();
-                      onNavigate(item.path);
-                    }
-                  }}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '5px 10px',
-                    fontSize: '12px',
-                    fontFamily: FUI_TOKENS.fontMono,
-                    fontWeight: active ? 700 : 500,
-                    textDecoration: 'none',
-                    backgroundColor: active ? FUI_TOKENS.accentOrange : FUI_TOKENS.bgPanel,
-                    color: active ? FUI_TOKENS.bgCarbon : FUI_TOKENS.inkStark,
-                    border: `1px solid ${active ? FUI_TOKENS.accentOrange : FUI_TOKENS.borderHairline}`,
-                    borderRadius: '0px',
-                  }}
-                >
-                  <span aria-hidden="true">[{item.code}]</span>
-                  <span>{item.label}</span>
-                </a>
-              );
-            })}
-          </nav>
-
           {/* Global Controls: ActiveTimerBar, Cmd+K, Privacy Mask, Frieren Cmd+J, Auth/QR */}
           <div
             style={{
@@ -260,19 +205,150 @@ export function AppShell({ pathname, onNavigate, children }: AppShellProps) {
         />
       </header>
 
-      {/* Main Route Outlet */}
-      <main
-        role="main"
+      {/* Workspace Body: Left Module Sidebar + Main Route Outlet */}
+      <div
+        data-testid="app-shell-body"
         style={{
           flex: 1,
+          minHeight: 0,
+          minWidth: 0,
           display: 'flex',
-          flexDirection: 'column',
+          flexDirection: 'row',
+          alignItems: 'stretch',
           backgroundColor: routeBg,
           borderRadius: '0px',
         }}
       >
-        {children}
-      </main>
+        {/* Left Navigation Sidebar */}
+        <aside
+          data-testid="app-shell-sidebar"
+          aria-label="Module Navigation Sidebar"
+          style={{
+            width: isKioskMonitor ? '164px' : '196px',
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: isKioskMonitor ? '10px 8px' : '12px 10px',
+            backgroundColor: FUI_TOKENS.bgCarbon,
+            borderRight: `1px solid ${FUI_TOKENS.borderHairline}`,
+            borderRadius: '0px',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderRadius: '0px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0 4px 6px 4px',
+                fontSize: '12px',
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                color: FUI_TOKENS.inkMuted,
+                borderBottom: `1px solid ${FUI_TOKENS.borderHairline}`,
+                borderRadius: '0px',
+              }}
+            >
+              <span>MODULES</span>
+              <span>[03–11]</span>
+            </div>
+
+            {/* Primary CSR Navigation */}
+            <nav
+              aria-label="Primary Module Navigation"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                gap: '4px',
+                borderRadius: '0px',
+              }}
+            >
+              {NAV_ITEMS.map((item) => {
+                const active =
+                  pathname === item.path ||
+                  (item.path !== '/dashboard' && pathname.startsWith(`${item.path}/`)) ||
+                  (item.path === '/dashboard' && pathname.startsWith('/dashboard/'));
+                return (
+                  <a
+                    key={item.path}
+                    href={item.path}
+                    data-testid={`nav-link-${item.label.toLowerCase()}`}
+                    aria-current={active ? 'page' : undefined}
+                    onClick={(e) => {
+                      if (
+                        e.button === 0 &&
+                        !e.metaKey &&
+                        !e.ctrlKey &&
+                        !e.shiftKey &&
+                        !e.altKey
+                      ) {
+                        e.preventDefault();
+                        onNavigate(item.path);
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '6px',
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      fontFamily: FUI_TOKENS.fontMono,
+                      fontWeight: active ? 700 : 500,
+                      textDecoration: 'none',
+                      backgroundColor: active ? FUI_TOKENS.accentOrange : FUI_TOKENS.bgPanel,
+                      color: active ? FUI_TOKENS.bgCarbon : FUI_TOKENS.inkStark,
+                      border: `1px solid ${active ? FUI_TOKENS.accentOrange : FUI_TOKENS.borderHairline}`,
+                      borderLeft: active
+                        ? `3px solid ${FUI_TOKENS.inkStark}`
+                        : `3px solid ${FUI_TOKENS.accentOrange}`,
+                      borderRadius: '0px',
+                    }}
+                  >
+                    <span>{item.label}</span>
+                    <span aria-hidden="true">[{item.code}]</span>
+                  </a>
+                );
+              })}
+            </nav>
+          </div>
+
+          <div
+            style={{
+              padding: '6px 8px',
+              fontSize: '12px',
+              color: FUI_TOKENS.inkMuted,
+              backgroundColor: FUI_TOKENS.bgPanel,
+              border: `1px solid ${FUI_TOKENS.borderHairline}`,
+              borderRadius: '0px',
+            }}
+          >
+            <div>SYS // CSR_READY</div>
+            <div style={{ color: FUI_TOKENS.accentCyan }}>ROUTE: {pathname}</div>
+          </div>
+        </aside>
+
+        {/* Main Route Outlet */}
+        <main
+          role="main"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            backgroundColor: routeBg,
+            borderRadius: '0px',
+          }}
+        >
+          {children}
+        </main>
+      </div>
 
       {/* Global Modals & Omnipresent Frieren Popover */}
       <QuickCaptureModal />

@@ -160,4 +160,81 @@ describe('knightsModel unit tests (F26)', () => {
     expect(chain.upcomingNodes.some((n) => n.agentId === knights[0].id)).toBe(false);
     expect(chain.upcomingNodes.some((n) => n.agentId === knights[1].id)).toBe(true);
   });
+
+  it('adv_02: marks Knights with is_paused: false as paused when circuit-broken (spent >= budget) or disabled, and excludes them from buildTurnOrderChain', () => {
+    const circuitBrokenKnight = computeKnightTelemetry({
+      ...FALLBACK_STARTER_KNIGHTS[0],
+      is_paused: false,
+      enabled: true,
+      monthly_budget_cents: 500,
+      spent_month_cents: 500,
+    });
+    expect(circuitBrokenKnight.remainingCents).toBe(0);
+    expect(circuitBrokenKnight.hpLabel).toBe('$0.00 / $5.00');
+    expect(circuitBrokenKnight.isCircuitBroken).toBe(true);
+    expect(circuitBrokenKnight.isPaused).toBe(true);
+
+    const disabledKnight = computeKnightTelemetry({
+      ...FALLBACK_STARTER_KNIGHTS[1],
+      is_paused: false,
+      enabled: false,
+      monthly_budget_cents: 500,
+      spent_month_cents: 0,
+    });
+    expect(disabledKnight.isPaused).toBe(true);
+
+    const activeKnight = computeKnightTelemetry(FALLBACK_STARTER_KNIGHTS[2]);
+    const chain = buildTurnOrderChain({
+      knights: [circuitBrokenKnight, disabledKnight, activeKnight],
+      queueItems: [
+        {
+          trigger_id: 'trig-cb',
+          agent_id: circuitBrokenKnight.id,
+          agent_slug: circuitBrokenKnight.slug,
+          agent_name: circuitBrokenKnight.name,
+          trigger_type: 'cron',
+          label: '0 0 7 * * *',
+          scheduled_at: null,
+        },
+        {
+          trigger_id: 'trig-dis',
+          agent_id: disabledKnight.id,
+          agent_slug: disabledKnight.slug,
+          agent_name: disabledKnight.name,
+          trigger_type: 'event',
+          label: 'PortfolioPriceAlert',
+          scheduled_at: null,
+        },
+        {
+          trigger_id: 'trig-act',
+          agent_id: activeKnight.id,
+          agent_slug: activeKnight.slug,
+          agent_name: activeKnight.name,
+          trigger_type: 'event',
+          label: 'YoutubeCrawlerSynced',
+          scheduled_at: null,
+        },
+      ],
+      recentRuns: [],
+    });
+
+    expect(chain.upcomingNodes.map((n) => n.agentId)).toEqual([activeKnight.id]);
+    expect(chain.activeKnight?.id).toBe(activeKnight.id);
+  });
+
+  it('adv_06: revokes (NONE) skill slots populated via wildcard * or domain_prefix tool keys while preserving other slots', () => {
+    const wildcardPolicy = { '*': 'AUTO' as const };
+    const afterRevokeTodos = buildUpdatedToolsPolicy(wildcardPolicy, 'todos.*', 'NONE');
+    expect(resolveSkillSlotMode(afterRevokeTodos, 'todos.*')).toBe('NONE');
+    expect(resolveSkillSlotMode(afterRevokeTodos, 'portfolio.*')).toBe('AUTO');
+    expect(resolveSkillSlotMode(afterRevokeTodos, 'vault.*')).toBe('AUTO');
+
+    const prefixPolicy = {
+      todos_create_task: 'AUTO' as const,
+      finance_get_portfolio: 'READ' as const,
+    };
+    const afterRevokePrefix = buildUpdatedToolsPolicy(prefixPolicy, 'todos.*', 'NONE');
+    expect(resolveSkillSlotMode(afterRevokePrefix, 'todos.*')).toBe('NONE');
+    expect(resolveSkillSlotMode(afterRevokePrefix, 'portfolio.*')).toBe('READ');
+  });
 });

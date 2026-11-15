@@ -36,6 +36,7 @@ export interface KnightForgeModalProps {
   onSubmit: (
     payload: CreateAgentPayload,
     pendingTrigger?: CreateAgentTriggerPayload,
+    pendingTriggers?: CreateAgentTriggerPayload[],
   ) => Promise<void>;
   onDelete?: (knightId: string) => Promise<void>;
   onAddTrigger?: (knightId: string, trigger: CreateAgentTriggerPayload) => Promise<void>;
@@ -158,26 +159,31 @@ export function KnightForgeModal({
     );
   };
 
+  const previewCrestColor = /^#[0-9a-fA-F]{6}$/.test(crestColor.trim())
+    ? crestColor.trim()
+    : '#F87C18';
+
   const handleFormSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
     if (e) e.preventDefault();
     if (isSubmitting) return;
-    const resolvedName = name.trim() || 'Vanguard Sentinel';
-    const resolvedSlug = slug.trim() || slugifyAgentName(resolvedName);
-    const resolvedCrest = /^#[0-9a-fA-F]{6}$/.test(crestColor.trim())
-      ? crestColor.trim()
-      : '#F87C18';
 
     const check = validateKnightForgeInput({
-      name: resolvedName,
+      name,
       systemPrompt,
-      crestColor: resolvedCrest,
+      crestColor,
       monthlyBudgetCents,
       epMaxTokens,
+      cronExpr: cronSchedule,
     });
     if (!check.valid) {
       setValidationError(check.errors.join(' '));
       return;
     }
+
+    const resolvedName = name.trim();
+    const resolvedSlug = slug.trim() || slugifyAgentName(resolvedName);
+    const resolvedCrest = crestColor.trim();
+    const resolvedEpMaxTokens = Math.max(4096, Math.round(Number(epMaxTokens) || 128000));
 
     setValidationError(null);
     const inBarracks = zone === 'standby_barracks';
@@ -190,7 +196,8 @@ export function KnightForgeModal({
       model_config: {
         model: model.trim() || 'claude-sonnet-4-20250514',
         thinking_effort: thinkingEffort,
-        max_context_tokens: Math.max(4096, Math.round(Number(epMaxTokens) || 128000)),
+        max_context_tokens: resolvedEpMaxTokens,
+        ep_daily_tokens: resolvedEpMaxTokens,
       },
       tools_policy: toolsPolicy,
       zone,
@@ -205,28 +212,32 @@ export function KnightForgeModal({
       is_paused: inBarracks,
     };
 
-    const pendingTrigger: CreateAgentTriggerPayload | undefined =
+    const pendingTriggers: CreateAgentTriggerPayload[] =
       zone === 'event_ambush' && eventTriggers.length > 0
-        ? {
-            type: 'event',
+        ? eventTriggers.map((evt) => ({
+            type: 'event' as const,
             config_json: {
-              event: eventTriggers[0],
-              description: `Reactive Ambush hook for ${eventTriggers[0]}`,
+              event: evt,
+              description: `Reactive Ambush hook for ${evt}`,
             },
             enabled: true,
-          }
+          }))
         : cronSchedule.trim()
-          ? {
-              type: 'cron',
-              config_json: {
-                cron: cronSchedule.trim(),
-                description: `Cron Watchtower schedule (${cronSchedule.trim()})`,
+          ? [
+              {
+                type: 'cron' as const,
+                config_json: {
+                  cron: cronSchedule.trim(),
+                  description: `Cron Watchtower schedule (${cronSchedule.trim()})`,
+                },
+                enabled: true,
               },
-              enabled: true,
-            }
-          : undefined;
+            ]
+          : [];
 
-    await onSubmit(payload, pendingTrigger);
+    const pendingTrigger: CreateAgentTriggerPayload | undefined = pendingTriggers[0];
+
+    await onSubmit(payload, pendingTrigger, pendingTriggers);
   };
 
   return (
@@ -345,7 +356,7 @@ export function KnightForgeModal({
               gap: '8px',
               padding: '12px',
               backgroundColor: FUI_TOKENS.bgArena,
-              border: `1px solid ${crestColor}`,
+              border: `1px solid ${previewCrestColor}`,
               borderRadius: '0px',
             }}
           >
@@ -354,7 +365,7 @@ export function KnightForgeModal({
               state={zone === 'standby_barracks' ? 'barracks_rest' : 'idle'}
               scale={2}
               name={name || 'New Knight'}
-              crestColor={crestColor}
+              crestColor={previewCrestColor}
               showHud={false}
             />
             <span
@@ -362,7 +373,7 @@ export function KnightForgeModal({
                 fontFamily: FUI_TOKENS.fontMono,
                 fontSize: '12px',
                 fontWeight: 700,
-                color: crestColor,
+                color: previewCrestColor,
                 textTransform: 'uppercase',
                 textAlign: 'center',
               }}

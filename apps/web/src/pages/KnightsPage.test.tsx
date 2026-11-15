@@ -1,9 +1,15 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KnightsPage } from './KnightsPage';
+import { useEventStream } from '../api/useEventStream';
 import { FALLBACK_STARTER_KNIGHTS } from '../components/knights/knightsModel';
+
+function EventStreamHarness() {
+  useEventStream();
+  return <KnightsPage />;
+}
 
 function renderKnightsPage() {
   const queryClient = new QueryClient({
@@ -529,6 +535,304 @@ describe('KnightsPage (/agents) — F26 Isometric Knight Arena & Knight Forge', 
           (init?.method ?? '').toUpperCase() === 'DELETE',
       );
       expect(delCall).toBeDefined();
+    });
+  });
+
+  it('adv_03: rejects blank name and invalid crest hex in KnightForgeModal with forge-validation-error without calling POST /api/agents', async () => {
+    const fetchMock = stubArenaApiMocks();
+    renderKnightsPage();
+
+    fireEvent.click(screen.getByTestId('forge-knight-btn'));
+    await screen.findByTestId('knight-forge-modal');
+
+    // Submit with whitespace-only name
+    fireEvent.change(screen.getByTestId('forge-name-input'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByTestId('forge-submit-btn'));
+
+    expect(screen.queryByTestId('forge-validation-error')).not.toBeNull();
+    expect(screen.getByTestId('forge-validation-error').textContent).toMatch(/name is required/i);
+
+    // Fix name, enter invalid hex color
+    fireEvent.change(screen.getByTestId('forge-name-input'), {
+      target: { value: 'Valid Sentinel' },
+    });
+    fireEvent.change(screen.getByTestId('forge-crest-input'), {
+      target: { value: 'not-a-hex' },
+    });
+    fireEvent.click(screen.getByTestId('forge-submit-btn'));
+
+    expect(screen.queryByTestId('forge-validation-error')).not.toBeNull();
+    expect(screen.getByTestId('forge-validation-error').textContent).toMatch(/hex/i);
+
+    const postAgentCalls = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).endsWith('/api/agents') && (init?.method ?? '').toUpperCase() === 'POST',
+    );
+    expect(postAgentCalls.length).toBe(0);
+
+    // Fix crest color, select event_ambush with multiple eventTriggers, and verify ep_daily_tokens + multiple trigger POSTs
+    fireEvent.change(screen.getByTestId('forge-crest-input'), {
+      target: { value: '#2CE5F2' },
+    });
+    fireEvent.change(screen.getByTestId('forge-zone-select'), {
+      target: { value: 'event_ambush' },
+    });
+    fireEvent.click(screen.getByTestId('forge-event-toggle-YoutubeCrawlerSynced'));
+    fireEvent.click(screen.getByTestId('forge-submit-btn'));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          String(url).endsWith('/api/agents') && (init?.method ?? '').toUpperCase() === 'POST',
+      );
+      expect(postCall).toBeDefined();
+      const body = JSON.parse(String(postCall?.[1]?.body));
+      expect(body.model_config.ep_daily_tokens).toBe(128000);
+      expect(body.model_config.max_context_tokens).toBe(128000);
+    });
+
+    await waitFor(() => {
+      const triggerCalls = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).includes('/triggers') && (init?.method ?? '').toUpperCase() === 'POST',
+      );
+      expect(triggerCalls.length).toBe(2);
+    });
+  });
+
+  it('adv_04: knight_run_updated SSE event from useEventStream triggers live cast animation on KnightsPage', async () => {
+    stubArenaApiMocks();
+
+    const listeners: Record<string, Array<(e: MessageEvent) => void>> = {};
+    class MockEventSource {
+      url: string;
+      constructor(url: string) {
+        this.url = url;
+      }
+      addEventListener(type: string, fn: (e: MessageEvent) => void) {
+        if (!listeners[type]) listeners[type] = [];
+        listeners[type].push(fn);
+      }
+      removeEventListener() {}
+      close() {}
+    }
+    vi.stubGlobal('EventSource', MockEventSource);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EventStreamHarness />
+      </QueryClientProvider>,
+    );
+
+    const unitCard = await screen.findByTestId('knight-unit-sir-chronos');
+    expect(unitCard.getAttribute('data-anim-state')).toBe('idle');
+
+    act(() => {
+      const ssePayload = JSON.stringify({
+        type: 'knight_run_updated',
+        run_id: 'run-sse-1',
+        agent_id: FALLBACK_STARTER_KNIGHTS[0].id,
+        agent_slug: 'sir-chronos',
+        status: 'running',
+      });
+      for (const fn of listeners['knight_run_updated'] ?? []) {
+        fn(new MessageEvent('knight_run_updated', { data: ssePayload }));
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('knight-unit-sir-chronos').getAttribute('data-anim-state')).toBe(
+        'casting',
+      );
+      expect(screen.getByTestId('turn-order-active-knight').textContent).toContain('CASTING_SSE');
+    });
+  });
+
+  it('adv_05: BattleLogsPanel renders real Rust backend steps_trace (kind, tool_name, rendered_prompt, summary, output, error) and estimated_cost_usd', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init?.method ?? 'GET').toUpperCase();
+
+      if (url.endsWith('/api/agents') && method === 'GET') {
+        return new Response(JSON.stringify({ items: FALLBACK_STARTER_KNIGHTS }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/dispatch') && method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            id: 'run-real-rust-01',
+            agent_id: FALLBACK_STARTER_KNIGHTS[0].id,
+            status: undefined,
+            is_dry_run: false,
+            summary: 'Completed Morning Chief of Staff sweep.',
+            hermes_session_key: 'knight-sir-chronos-rust',
+            input_tokens: 800,
+            output_tokens: 350,
+            estimated_cost_usd: '0.050000',
+            steps_trace: [
+              {
+                step: 1,
+                kind: 'soul_interpolation',
+                rendered_prompt: 'Date: 2026-11-15 — Synthesize Morning Pulse.',
+              },
+              {
+                step: 2,
+                kind: 'mcp_tool_executed',
+                tool_name: 'todos_create_task',
+                output: 'Created priority task: Review Q4 OKR metrics',
+              },
+              {
+                step: 3,
+                kind: 'mcp_tool_denied_or_failed',
+                tool_name: 'finance_rebalance',
+                error: 'Policy denied write execution without approval',
+              },
+            ],
+            started_at: '2026-11-15T07:00:00Z',
+            finished_at: '2026-11-15T07:00:01Z',
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderKnightsPage();
+
+    const dispatchBtn = await screen.findByTestId('dispatch-knight-btn');
+    fireEvent.click(dispatchBtn);
+
+    await waitFor(() => {
+      const traceContainer = screen.getByTestId('battle-log-steps-trace');
+      const text = traceContainer.textContent ?? '';
+      expect(text).toContain('soul_interpolation');
+      expect(text).toContain('Date: 2026-11-15 — Synthesize Morning Pulse.');
+      expect(text).toContain('mcp_tool_executed');
+      expect(text).toContain('todos_create_task');
+      expect(text).toContain('Created priority task: Review Q4 OKR metrics');
+      expect(text).toContain('mcp_tool_denied_or_failed');
+      expect(text).toContain('finance_rebalance');
+      expect(text).toContain('Policy denied write execution without approval');
+      expect(text).toContain('[FAILED]');
+      expect(screen.getByTestId('battle-log-cost').textContent).toBe('$0.05');
+    });
+  });
+
+  it('adv_07 & adv_07b: syncs refetched server telemetry after a prior skill-slot edit and empties trigger list when deleting the last trigger', async () => {
+    let serverSpentCents = 160;
+    let serverTriggers = [...(FALLBACK_STARTER_KNIGHTS[0].triggers ?? [])];
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init?.method ?? 'GET').toUpperCase();
+
+      if (url.endsWith('/api/agents') && method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                ...FALLBACK_STARTER_KNIGHTS[0],
+                monthly_budget_cents: 500,
+                spent_month_cents: serverSpentCents,
+                hp_remaining_cents: Math.max(0, 500 - serverSpentCents),
+                triggers: serverTriggers,
+              },
+              ...FALLBACK_STARTER_KNIGHTS.slice(1),
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (/\/api\/agents\/[^/]+$/.test(url) && method === 'PUT') {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        return new Response(
+          JSON.stringify({
+            ...FALLBACK_STARTER_KNIGHTS[0],
+            ...body,
+            spent_month_cents: serverSpentCents,
+            hp_remaining_cents: Math.max(0, 500 - serverSpentCents),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (url.includes('/dispatch') && method === 'POST') {
+        serverSpentCents = 500;
+        return new Response(
+          JSON.stringify({
+            id: 'run-exhaust-budget',
+            agent_id: FALLBACK_STARTER_KNIGHTS[0].id,
+            status: 'succeeded',
+            is_dry_run: false,
+            estimated_cost_usd: '3.400000',
+            steps_trace: [],
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (url.includes('/triggers') && method === 'GET') {
+        return new Response(JSON.stringify({ items: serverTriggers }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (url.includes('/triggers/') && method === 'DELETE') {
+        serverTriggers = [];
+        return new Response(JSON.stringify({ id: 'deleted', deleted: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+    renderKnightsPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-knight-hp-label').textContent).toBe('$3.40 / $5.00');
+    });
+
+    // 1. Mutate a skill slot first (adds Knight to local patch state)
+    fireEvent.click(screen.getByTestId('skill-policy-portfolio-approve'));
+
+    // 2. Dispatch Knight, which exhausts server budget (spent_month_cents: 500) and refetches GET /api/agents
+    fireEvent.click(screen.getByTestId('dispatch-knight-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-knight-hp-label').textContent).toBe('$0.00 / $5.00');
+    });
+
+    // 3. Open KnightForgeModal in edit mode and delete the last trigger
+    fireEvent.click(screen.getByTestId('edit-knight-btn'));
+    const triggerId = FALLBACK_STARTER_KNIGHTS[0].triggers![0].id;
+    const triggerRow = await screen.findByTestId(`forge-trigger-row-${triggerId}`);
+    expect(triggerRow).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId(`forge-delete-trigger-${triggerId}`));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(`forge-trigger-row-${triggerId}`)).toBeNull();
     });
   });
 });

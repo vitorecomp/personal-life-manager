@@ -297,7 +297,15 @@ export interface CreateAgentTriggerPayload {
 
 export async function listAgentTriggers(idOrSlug: string): Promise<AgentTrigger[]> {
   const res = await apiGet<unknown>(`/api/agents/${encodeURIComponent(idOrSlug)}/triggers`);
-  return unwrapList<AgentTrigger>(res, ['triggers']);
+  if (
+    Array.isArray(res) ||
+    (res !== null &&
+      typeof res === 'object' &&
+      ('items' in res || 'triggers' in res || 'data' in res))
+  ) {
+    return unwrapList<AgentTrigger>(res, ['triggers']);
+  }
+  throw new Error('Unexpected trigger list payload');
 }
 
 export async function createAgentTrigger(

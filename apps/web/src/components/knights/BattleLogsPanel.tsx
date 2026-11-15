@@ -73,25 +73,34 @@ export function BattleLogsPanel({
 
   const resolveCostUsd = (run: ExtendedAgentRun): string => {
     if (run.is_dry_run) return '$0.00';
+    if (run.estimated_cost_usd !== undefined && run.estimated_cost_usd !== null) {
+      const raw = String(run.estimated_cost_usd).trim().replace(/^\$/, '');
+      const parsed = Number.parseFloat(raw);
+      if (Number.isFinite(parsed)) {
+        return `$${Math.max(0, parsed).toFixed(2)}`;
+      }
+      if (raw) {
+        return raw.startsWith('$') ? raw : `$${raw}`;
+      }
+    }
     if (typeof run.cost_cents === 'number') {
       return formatUsdFromCents(run.cost_cents);
     }
     if (typeof run.estimated_cost_cents === 'number') {
       return formatUsdFromCents(run.estimated_cost_cents);
     }
-    if (run.estimated_cost_usd !== undefined && run.estimated_cost_usd !== null) {
-      const raw = String(run.estimated_cost_usd).trim();
-      return raw.startsWith('$') ? raw : `$${raw}`;
-    }
     return '$0.00';
   };
 
-  const statusColor = (status: string, isDryRun?: boolean): string => {
-    if (isDryRun || status.toLowerCase().includes('dry')) return FUI_TOKENS.accentCyan;
-    const s = status.toLowerCase();
+  const statusColor = (status?: string | null, isDryRun?: boolean): string => {
+    const safeStatus = String(status ?? 'ok');
+    const s = safeStatus.toLowerCase();
+    if (isDryRun || s.includes('dry')) return FUI_TOKENS.accentCyan;
     if (s === 'completed' || s === 'succeeded' || s === 'ok') return FUI_TOKENS.accentPhosphor;
     if (s === 'running' || s === 'casting') return FUI_TOKENS.accentOrange;
-    if (s === 'failed' || s === 'error' || s === 'budget_halted') return FUI_TOKENS.accentVermilion;
+    if (s === 'failed' || s === 'error' || s === 'budget_halted' || s.includes('denied')) {
+      return FUI_TOKENS.accentVermilion;
+    }
     return FUI_TOKENS.accentAmber;
   };
 
@@ -361,8 +370,12 @@ export function BattleLogsPanel({
         ) : (
           displayedRuns.map((run) => {
             const isSelected = activeRun?.id === run.id;
-            const badgeColor = statusColor(run.status, run.is_dry_run);
-            const knightName = knightNameById.get(run.agent_id) ?? `Knight ${run.agent_id.slice(0, 6)}`;
+            const safeRunStatus = String(run.status ?? 'ok');
+            const badgeColor = statusColor(safeRunStatus, run.is_dry_run);
+            const agentIdStr = String(run.agent_id || '');
+            const knightName =
+              knightNameById.get(agentIdStr) ??
+              (agentIdStr ? `Knight ${agentIdStr.slice(0, 6)}` : 'Knight');
             const tokCount = resolveTokens(run);
             const latencyMs = resolveLatencyMs(run);
             const trigLabel = (run.trigger_type || (run.is_dry_run ? 'dry_run' : 'manual')).toUpperCase();
@@ -412,7 +425,7 @@ export function BattleLogsPanel({
                       textTransform: 'uppercase',
                     }}
                   >
-                    {run.is_dry_run ? 'DRY-RUN' : run.status}
+                    {run.is_dry_run ? 'DRY-RUN' : safeRunStatus}
                   </span>
                 </div>
 
@@ -588,39 +601,90 @@ export function BattleLogsPanel({
                       : 'Executed /mcp domain tool call under Knight policy gate.',
                   },
                 ]
-            ).map((stepObj, idx) => (
-              <div
-                key={`${activeRun.id}-step-${idx}`}
-                data-testid={`battle-log-step-${idx}`}
-                style={{
-                  padding: '6px 8px',
-                  backgroundColor: FUI_TOKENS.bgPanel,
-                  border: `1px solid ${FUI_TOKENS.borderHairline}`,
-                  borderRadius: '0px',
-                  fontFamily: FUI_TOKENS.fontMono,
-                  fontSize: '12px',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
-                  <span style={{ color: FUI_TOKENS.accentCyan, fontWeight: 700 }}>
-                    #{stepObj.step ?? idx + 1} {stepObj.tool || stepObj.phase || 'step'}
-                  </span>
-                  <span
-                    style={{
-                      color:
-                        stepObj.status === 'simulated_dry_run'
-                          ? FUI_TOKENS.accentCyan
-                          : FUI_TOKENS.accentPhosphor,
-                    }}
-                  >
-                    [{String(stepObj.status || 'ok').toUpperCase()}]
-                  </span>
+            ).map((stepObj, idx) => {
+              const labelParts: string[] = [];
+              if (typeof stepObj.kind === 'string' && stepObj.kind.trim()) {
+                labelParts.push(stepObj.kind.trim());
+              }
+              if (
+                typeof stepObj.tool_name === 'string' &&
+                stepObj.tool_name.trim() &&
+                !labelParts.includes(stepObj.tool_name.trim())
+              ) {
+                labelParts.push(stepObj.tool_name.trim());
+              }
+              if (labelParts.length === 0) {
+                labelParts.push(String(stepObj.tool || stepObj.phase || 'step'));
+              }
+              const stepLabel = labelParts.join(' · ');
+
+              const derivedStatus =
+                stepObj.status ||
+                (stepObj.kind === 'mcp_tool_denied_or_failed' || stepObj.error
+                  ? 'failed'
+                  : stepObj.is_dry_run || stepObj.kind === 'dry_run_tool_simulation'
+                    ? 'dry_run'
+                    : 'ok');
+              const safeStepStatus = String(derivedStatus ?? 'ok');
+              const stepStatusColor = statusColor(safeStepStatus, Boolean(stepObj.is_dry_run));
+
+              const detailParts: string[] = [];
+              const appendDetail = (val: unknown) => {
+                if (typeof val === 'string' && val.trim()) {
+                  const trimmed = val.trim();
+                  if (!detailParts.includes(trimmed)) {
+                    detailParts.push(trimmed);
+                  }
+                }
+              };
+              appendDetail(stepObj.detail);
+              appendDetail(stepObj.rendered_prompt);
+              appendDetail(stepObj.summary);
+              appendDetail(stepObj.output);
+              appendDetail(stepObj.error);
+              if (Array.isArray(stepObj.simulated_tools) && stepObj.simulated_tools.length > 0) {
+                appendDetail(stepObj.simulated_tools.join(', '));
+              }
+              if (stepObj.result !== undefined && stepObj.result !== null) {
+                appendDetail(
+                  typeof stepObj.result === 'string'
+                    ? stepObj.result
+                    : JSON.stringify(stepObj.result),
+                );
+              }
+              const detailText = detailParts.join(' — ');
+
+              return (
+                <div
+                  key={`${activeRun.id}-step-${idx}`}
+                  data-testid={`battle-log-step-${idx}`}
+                  style={{
+                    padding: '6px 8px',
+                    backgroundColor: FUI_TOKENS.bgPanel,
+                    border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                    borderRadius: '0px',
+                    fontFamily: FUI_TOKENS.fontMono,
+                    fontSize: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+                    <span style={{ color: FUI_TOKENS.accentCyan, fontWeight: 700 }}>
+                      #{stepObj.step ?? idx + 1} {stepLabel}
+                    </span>
+                    <span
+                      style={{
+                        color: stepStatusColor,
+                      }}
+                    >
+                      [{safeStepStatus.toUpperCase()}]
+                    </span>
+                  </div>
+                  {detailText && (
+                    <div style={{ color: FUI_TOKENS.inkProse, marginTop: '2px' }}>{detailText}</div>
+                  )}
                 </div>
-                {stepObj.detail && (
-                  <div style={{ color: FUI_TOKENS.inkProse, marginTop: '2px' }}>{stepObj.detail}</div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

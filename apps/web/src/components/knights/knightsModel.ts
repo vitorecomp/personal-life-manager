@@ -528,21 +528,29 @@ export function computeKnightTelemetry(
     0,
     Math.round(Number(raw.monthly_budget_cents ?? raw.hp_budget_cents ?? 500)),
   );
-  const spentCents = Math.max(
+  const hasExplicitSpend =
+    raw.spent_month_cents !== undefined ||
+    raw.month_spent_cents !== undefined ||
+    raw.hp_spent_cents !== undefined;
+  const rawSpentCents = Math.max(
     0,
-    Math.round(Number(raw.spent_month_cents ?? raw.hp_spent_cents ?? 0)),
+    Math.round(
+      Number(raw.spent_month_cents ?? raw.month_spent_cents ?? raw.hp_spent_cents ?? 0),
+    ),
   );
-  const remainingCents =
-    raw.hp_remaining_cents !== undefined && Number.isFinite(Number(raw.hp_remaining_cents))
-      ? Math.max(0, Math.round(Number(raw.hp_remaining_cents)))
-      : Math.max(0, budgetCents - spentCents);
+  const remainingCents = hasExplicitSpend
+    ? Math.max(0, budgetCents - rawSpentCents)
+    : raw.hp_remaining_cents !== undefined && Number.isFinite(Number(raw.hp_remaining_cents))
+      ? Math.min(budgetCents, Math.max(0, Math.round(Number(raw.hp_remaining_cents))))
+      : Math.max(0, budgetCents - rawSpentCents);
+  const spentCents = hasExplicitSpend
+    ? rawSpentCents
+    : Math.max(0, budgetCents - remainingCents);
 
   const hpPct =
     budgetCents <= 0
       ? 0
-      : raw.hp_pct !== undefined && Number.isFinite(Number(raw.hp_pct))
-        ? Math.min(100, Math.max(0, Math.round(Number(raw.hp_pct))))
-        : Math.min(100, Math.max(0, Math.round((remainingCents / budgetCents) * 100)));
+      : Math.min(100, Math.max(0, Math.round((remainingCents / budgetCents) * 100)));
 
   const modelCfg =
     raw.model_config && typeof raw.model_config === 'object'
@@ -552,7 +560,9 @@ export function computeKnightTelemetry(
   const runTokens = latestRun
     ? Math.max(0, Number(latestRun.input_tokens || 0) + Number(latestRun.output_tokens || 0))
     : 0;
-  const rawEpUsed = Number(raw.ep_used_tokens ?? 0);
+  const rawEpUsed = Number(
+    raw.ep_used_tokens ?? raw.tokens_today ?? raw.ep_Context_tokens_used ?? 0,
+  );
   const epUsedTokens = rawEpUsed > 0 ? rawEpUsed : runTokens;
 
   const epMaxTokens = Math.max(
@@ -568,13 +578,10 @@ export function computeKnightTelemetry(
   );
 
   // epPct for the bar: if epUsedTokens > 0, show either load or remaining quota consistently
-  const epPct =
-    raw.ep_pct !== undefined && Number.isFinite(Number(raw.ep_pct))
-      ? Math.min(100, Math.max(0, Math.round(Number(raw.ep_pct))))
-      : Math.min(
-          100,
-          Math.max(0, Math.round(((epMaxTokens - epUsedTokens) / epMaxTokens) * 100)),
-        );
+  const epPct = Math.min(
+    100,
+    Math.max(0, Math.round(((epMaxTokens - epUsedTokens) / epMaxTokens) * 100)),
+  );
 
   const rawZone =
     raw.grid_pos?.zone ??
@@ -590,9 +597,11 @@ export function computeKnightTelemetry(
 
   const enabled = raw.enabled !== undefined ? Boolean(raw.enabled) : zone !== 'standby_barracks';
   const isCircuitBroken = remainingCents <= 0;
-  const isPaused = Boolean(
-    raw.is_paused ?? (!enabled || zone === 'standby_barracks' || isCircuitBroken),
-  );
+  const isPaused =
+    Boolean(raw.is_paused) ||
+    !enabled ||
+    zone === 'standby_barracks' ||
+    isCircuitBroken;
 
   const rawPolicy =
     raw.tools_policy && typeof raw.tools_policy === 'object'
@@ -647,19 +656,38 @@ export function computeKnightTelemetry(
 
 export function resolveSkillSlotMode(
   toolsPolicy: Record<string, unknown> | undefined | null,
-  slot: SkillSlotDescriptor,
+  slotOrKey: SkillSlotDescriptor | string,
 ): UiSkillPolicyMode {
   if (!toolsPolicy || typeof toolsPolicy !== 'object') return 'NONE';
+  const slot: SkillSlotDescriptor =
+    typeof slotOrKey === 'string'
+      ? (STANDARD_SKILL_SLOTS.find(
+          (s) => s.key === slotOrKey || s.aliases.includes(slotOrKey),
+        ) ?? {
+          key: slotOrKey,
+          aliases: [slotOrKey, slotOrKey.replace(/\.\*$/, '')],
+          code: 'SLOT_CUSTOM',
+          label: slotOrKey,
+          subtitle: '',
+        })
+      : slotOrKey;
+
   for (const alias of slot.aliases) {
     if (alias in toolsPolicy) {
       return normalizeSkillPolicyMode(toolsPolicy[alias]);
     }
   }
-  // Check if any exact tool key starts with domain prefix (e.g. `todos_create_task`)
-  const prefix = slot.key.replace('.*', '_');
+
+  // Check if any exact tool key starts with domain prefix (e.g. `todos_create_task` or `todos.list`)
+  const prefixes = Array.from(
+    new Set([
+      slot.key.replace(/\.\*$/, ''),
+      ...slot.aliases.map((a) => a.replace(/(\.\*|_\*)$/, '')),
+    ]),
+  );
   const matchingModes: UiSkillPolicyMode[] = [];
   for (const [k, v] of Object.entries(toolsPolicy)) {
-    if (k.startsWith(prefix) || (slot.key === 'portfolio.*' && k.startsWith('finance_'))) {
+    if (prefixes.some((p) => k === p || k.startsWith(`${p}_`) || k.startsWith(`${p}.`))) {
       const m = normalizeSkillPolicyMode(v);
       if (m !== 'NONE') matchingModes.push(m);
     }
@@ -683,19 +711,63 @@ export function buildUpdatedToolsPolicy(
     (s) => s.key === slotKey || s.aliases.includes(slotKey),
   );
 
+  // If wildcard '*' is present, expand it into explicit entries for all other standard slots first
+  if ('*' in next && typeof next['*'] === 'string') {
+    const wildcardMode = normalizeSkillPolicyMode(next['*']);
+    delete next['*'];
+    if (wildcardMode !== 'NONE') {
+      for (const otherSlot of STANDARD_SKILL_SLOTS) {
+        if (descriptor && otherSlot.key === descriptor.key) continue;
+        if (!descriptor && (otherSlot.key === slotKey || otherSlot.aliases.includes(slotKey))) {
+          continue;
+        }
+        const existingMode = resolveSkillSlotMode(next, otherSlot);
+        if (existingMode === 'NONE') {
+          next[otherSlot.key] = wildcardMode;
+          const otherPrefix = otherSlot.key.replace(/\.\*$/, '');
+          next[otherPrefix] = wildcardMode;
+          if (otherSlot.key === 'portfolio.*') {
+            next['finance.*'] = wildcardMode;
+            next['finance'] = wildcardMode;
+          }
+        }
+      }
+    }
+  }
+
+  const prefixes = descriptor
+    ? Array.from(
+        new Set([
+          descriptor.key.replace(/\.\*$/, ''),
+          ...descriptor.aliases.map((a) => a.replace(/(\.\*|_\*)$/, '')),
+        ]),
+      )
+    : [slotKey.replace(/(\.\*|_\*)$/, '')];
+
   const keysToClear = descriptor ? descriptor.aliases : [slotKey];
-  for (const k of keysToClear) {
-    delete next[k];
+  for (const k of Object.keys(next)) {
+    if (
+      keysToClear.includes(k) ||
+      prefixes.some((p) => k === p || k.startsWith(`${p}_`) || k.startsWith(`${p}.`))
+    ) {
+      delete next[k];
+    }
   }
 
   if (nextMode !== 'NONE') {
     if (descriptor && descriptor.key === 'portfolio.*') {
       next['portfolio.*'] = nextMode;
+      next['portfolio'] = nextMode;
       next['finance.*'] = nextMode;
+      next['finance'] = nextMode;
     } else if (descriptor) {
+      const prefix = descriptor.key.replace(/\.\*$/, '');
       next[descriptor.key] = nextMode;
+      next[prefix] = nextMode;
     } else {
+      const prefix = slotKey.replace(/\.\*$/, '');
       next[slotKey] = nextMode;
+      next[prefix] = nextMode;
     }
   }
 
@@ -742,25 +814,39 @@ export interface KnightForgeValidationResult {
 
 export function validateKnightForgeInput(input: {
   name: string;
-  systemPrompt: string;
+  systemPrompt?: string;
   crestColor: string;
-  monthlyBudgetCents: number;
-  epMaxTokens: number;
+  monthlyBudgetCents?: number;
+  monthlyBudgetUsd?: number;
+  epMaxTokens?: number;
+  cronExpr?: string;
 }): KnightForgeValidationResult {
   const errors: string[] = [];
   if (!input.name || !input.name.trim()) {
     errors.push('Knight name is required.');
   }
-  if (!input.systemPrompt || !input.systemPrompt.trim()) {
+  if (input.systemPrompt !== undefined && !input.systemPrompt.trim()) {
     errors.push('System Oath (SOUL.md prompt) is required.');
   }
   if (!/^#[0-9a-fA-F]{6}$/.test((input.crestColor || '').trim())) {
     errors.push('Crest color must be a 6-digit hex code (e.g. #F87C18).');
   }
-  if (!Number.isFinite(input.monthlyBudgetCents) || input.monthlyBudgetCents < 0) {
+  if (
+    input.monthlyBudgetCents !== undefined &&
+    (!Number.isFinite(input.monthlyBudgetCents) || input.monthlyBudgetCents < 0)
+  ) {
     errors.push('Monthly HP budget must be 0 or greater (in cents).');
   }
-  if (!Number.isFinite(input.epMaxTokens) || input.epMaxTokens < 1000) {
+  if (
+    input.monthlyBudgetUsd !== undefined &&
+    (!Number.isFinite(input.monthlyBudgetUsd) || input.monthlyBudgetUsd < 0)
+  ) {
+    errors.push('Monthly HP budget must be 0 or greater.');
+  }
+  if (
+    input.epMaxTokens !== undefined &&
+    (!Number.isFinite(input.epMaxTokens) || input.epMaxTokens < 1000)
+  ) {
     errors.push('EP context token cap must be at least 1,000 tokens.');
   }
   return {
@@ -771,7 +857,7 @@ export function validateKnightForgeInput(input: {
 
 /**
  * Builds the Turn-Order Timeline (`recent runs -> [ACTIVE] Knight -> upcoming scheduled runs`)
- * while strictly excluding paused / Standby Barracks Knights from upcoming scheduled execution.
+ * while strictly excluding paused / Standby Barracks / circuit-broken Knights from upcoming scheduled execution.
  */
 export function buildTurnOrderChain(params: {
   knights: ComputedKnightTelemetry[];
@@ -808,16 +894,29 @@ export function buildTurnOrderChain(params: {
     bySlug.set(k.slug, k);
   }
 
+  const isEligibleForQueue = (k: ComputedKnightTelemetry) =>
+    !k.isPaused && !k.isCircuitBroken && k.enabled && k.zone !== 'standby_barracks';
+
   const recentNodes = recentRuns.slice(0, 3).map((r) => {
     const k = byId.get(r.agent_id) ?? bySlug.get(r.agent_id);
+    const parsedCost =
+      r.estimated_cost_usd != null
+        ? Number.parseFloat(String(r.estimated_cost_usd).trim().replace(/^\$/, ''))
+        : typeof (r as any).cost_cents === 'number'
+          ? (r as any).cost_cents / 100
+          : 0;
+    const costUsd =
+      r.is_dry_run || !Number.isFinite(parsedCost)
+        ? '0.00'
+        : Math.max(0, parsedCost).toFixed(2);
     return {
       id: r.id,
       knightName: k?.name ?? r.agent_id,
       crestColor: k?.crestColor ?? '#F87C18',
-      status: r.status,
+      status: String(r.status ?? 'ok'),
       isDryRun: Boolean(r.is_dry_run),
       tokens: Math.max(0, Number(r.input_tokens || 0) + Number(r.output_tokens || 0)),
-      costUsd: String(r.estimated_cost_usd ?? '0.00'),
+      costUsd,
     };
   });
 
@@ -828,15 +927,15 @@ export function buildTurnOrderChain(params: {
     (activeKnightId
       ? (byId.get(activeKnightId) ?? bySlug.get(activeKnightId))
       : null) ??
-    knights.find((k) => !k.isPaused && k.zone !== 'standby_barracks') ??
+    knights.find((k) => isEligibleForQueue(k)) ??
     knights[0] ??
     null;
 
-  // Filter queue items to exclude paused or standby_barracks Knights (F26-K02)
+  // Filter queue items to exclude paused, circuit-broken, disabled, or standby_barracks Knights
   const validQueue = queueItems.filter((item) => {
     const k = byId.get(item.agent_id) ?? bySlug.get(item.agent_slug);
     if (!k) return true;
-    return !k.isPaused && k.zone !== 'standby_barracks';
+    return isEligibleForQueue(k);
   });
 
   const upcomingNodes =
@@ -854,7 +953,7 @@ export function buildTurnOrderChain(params: {
           };
         })
       : knights
-          .filter((k) => !k.isPaused && k.zone !== 'standby_barracks')
+          .filter((k) => isEligibleForQueue(k))
           .flatMap((k) =>
             k.triggers
               .filter((t) => t.enabled)

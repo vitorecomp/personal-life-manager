@@ -34,7 +34,7 @@ export function IsometricArenaBoard({
     knights.find((k) => k.id === selectedKnightId) ?? knights[0] ?? null;
 
   const resolveSpriteState = (k: ComputedKnightTelemetry): KnightAnimState => {
-    if (castingKnightId === k.id) return 'cast';
+    if (castingKnightId && (castingKnightId === k.id || castingKnightId === k.slug)) return 'cast';
     if (k.zone === 'standby_barracks' || k.isPaused) return 'barracks_rest';
     if (k.isCircuitBroken) return 'alert';
     return 'idle';

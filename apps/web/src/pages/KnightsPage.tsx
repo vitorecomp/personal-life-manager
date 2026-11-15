@@ -52,7 +52,9 @@ export function KnightsPage(): React.ReactElement {
   const [localKnightsOverlay, setLocalKnightsOverlay] = useState<AgentWithTelemetry[] | null>(
     null,
   );
-  const [mutatedKnightIds, setMutatedKnightIds] = useState<Set<string>>(() => new Set());
+  const [localKnightPatches, setLocalKnightPatches] = useState<
+    Record<string, Partial<AgentWithTelemetry>>
+  >({});
   const [deletedKnightIds, setDeletedKnightIds] = useState<Set<string>>(() => new Set());
   const [localRunsOverlay, setLocalRunsOverlay] = useState<ExtendedAgentRun[]>([]);
 
@@ -72,14 +74,23 @@ export function KnightsPage(): React.ReactElement {
     if (agentsQuery.data) {
       setLocalKnightsOverlay((prev) => {
         const filteredIncoming = agentsQuery.data.filter((a) => !deletedKnightIds.has(a.id));
-        if (!prev) return filteredIncoming;
-        const prevById = new Map(prev.map((k) => [k.id, k]));
         const merged = filteredIncoming.map((inc) => {
-          if (mutatedKnightIds.has(inc.id) && prevById.has(inc.id)) {
-            return prevById.get(inc.id)!;
-          }
-          return inc;
+          const patch = localKnightPatches[inc.id];
+          if (!patch) return inc;
+          return {
+            ...inc,
+            ...patch,
+            // Always prefer fresh server spend/token telemetry from `inc`
+            spent_month_cents: inc.spent_month_cents,
+            ...(inc as Record<string, any>).month_spent_cents !== undefined
+              ? { month_spent_cents: (inc as Record<string, any>).month_spent_cents }
+              : {},
+            ep_used_tokens: inc.ep_used_tokens,
+            ep_pct: inc.ep_pct,
+            triggers: patch.triggers ?? inc.triggers,
+          } as AgentWithTelemetry;
         });
+        if (!prev) return merged;
         const incomingIds = new Set(filteredIncoming.map((a) => a.id));
         const localOnly = prev.filter(
           (k) => !incomingIds.has(k.id) && !deletedKnightIds.has(k.id),
@@ -87,7 +98,7 @@ export function KnightsPage(): React.ReactElement {
         return [...merged, ...localOnly];
       });
     }
-  }, [agentsQuery.data, mutatedKnightIds, deletedKnightIds]);
+  }, [agentsQuery.data, localKnightPatches, deletedKnightIds]);
 
   const rawKnights: AgentWithTelemetry[] = useMemo(() => {
     return localKnightsOverlay ?? agentsQuery.data ?? [...FALLBACK_STARTER_KNIGHTS];
@@ -173,7 +184,12 @@ export function KnightsPage(): React.ReactElement {
       if (!selectedKnight) return [] as AgentTrigger[];
       try {
         const list = await listAgentTriggers(selectedKnight.id);
-        return list.length > 0 ? list : selectedKnight.triggers;
+        setLocalKnightsOverlay((prev) =>
+          prev
+            ? prev.map((k) => (k.id === selectedKnight.id ? { ...k, triggers: list } : k))
+            : prev,
+        );
+        return list;
       } catch {
         return selectedKnight.triggers;
       }
@@ -182,9 +198,14 @@ export function KnightsPage(): React.ReactElement {
 
   // Subscribe to SSE live cast state written by useEventStream
   const liveCastQuery = useQuery<{
+    run_id?: string;
     runId?: string;
+    agent_id?: string;
     agentId?: string;
+    agent_slug?: string;
+    agentSlug?: string;
     status?: string;
+    receivedAt?: number;
     updatedAt?: number;
   } | null>({
     queryKey: ['knight-live-cast'],
@@ -194,10 +215,20 @@ export function KnightsPage(): React.ReactElement {
 
   useEffect(() => {
     const payload = liveCastQuery.data;
-    if (!payload?.agentId) return;
-    setCastingKnightId(payload.agentId);
+    if (!payload) return;
+    const rawId = payload.agent_id ?? payload.agentId;
+    const rawSlug = payload.agent_slug ?? payload.agentSlug;
+    if (!rawId && !rawSlug) return;
+    const matched = knights.find(
+      (k) =>
+        (rawId && (k.id === rawId || k.slug === rawId)) ||
+        (rawSlug && (k.slug === rawSlug || k.id === rawSlug)),
+    );
+    const resolvedId = matched?.id ?? rawId ?? rawSlug ?? null;
+    if (!resolvedId) return;
+    setCastingKnightId(resolvedId);
     const timer = setTimeout(() => {
-      setCastingKnightId((prev) => (prev === payload.agentId ? null : prev));
+      setCastingKnightId((prev) => (prev === resolvedId ? null : prev));
     }, 2400);
     return () => clearTimeout(timer);
   }, [liveCastQuery.data]);
@@ -212,18 +243,24 @@ export function KnightsPage(): React.ReactElement {
     const normalizedZone = normalizeArenaZone(targetZone);
     const inBarracks = normalizedZone === 'standby_barracks';
     const nextGridPos = { x, y, zone: normalizedZone };
+    const deployPatch: Partial<AgentWithTelemetry> = {
+      grid_pos: nextGridPos,
+      is_paused: inBarracks,
+      enabled: !inBarracks,
+    };
 
     setRedeployBusyId(knight.id);
-    setMutatedKnightIds((prev) => new Set(prev).add(knight.id));
+    setLocalKnightPatches((prev) => ({
+      ...prev,
+      [knight.id]: { ...prev[knight.id], ...deployPatch },
+    }));
     setLocalKnightsOverlay((prev) => {
       const base = prev ?? rawKnights;
       return base.map((k) =>
         k.id === knight.id
           ? {
               ...k,
-              grid_pos: nextGridPos,
-              is_paused: inBarracks,
-              enabled: !inBarracks,
+              ...deployPatch,
             }
           : k,
       );
@@ -248,9 +285,7 @@ export function KnightsPage(): React.ReactElement {
             ? {
                 ...k,
                 ...updated,
-                grid_pos: nextGridPos,
-                is_paused: inBarracks,
-                enabled: !inBarracks,
+                ...deployPatch,
               }
             : k,
         ),
@@ -283,7 +318,13 @@ export function KnightsPage(): React.ReactElement {
     );
 
     setIsSavingPolicy(true);
-    setMutatedKnightIds((prev) => new Set(prev).add(selectedKnight.id));
+    setLocalKnightPatches((prev) => ({
+      ...prev,
+      [selectedKnight.id]: {
+        ...prev[selectedKnight.id],
+        tools_policy: updatedPolicy,
+      },
+    }));
     setLocalKnightsOverlay((prev) =>
       (prev ?? rawKnights).map((k) =>
         k.id === selectedKnight.id ? { ...k, tools_policy: updatedPolicy } : k,
@@ -329,10 +370,21 @@ export function KnightsPage(): React.ReactElement {
         sample_input: task,
         input: task,
       })) as ExtendedAgentRun;
+      const parsedEstimatedUsd =
+        runRecord.estimated_cost_usd !== undefined && runRecord.estimated_cost_usd !== null
+          ? Number.parseFloat(String(runRecord.estimated_cost_usd).trim().replace(/^\$/, ''))
+          : Number.NaN;
+      const resolvedCostCents = dryRun
+        ? 0
+        : typeof runRecord.cost_cents === 'number'
+          ? runRecord.cost_cents
+          : Number.isFinite(parsedEstimatedUsd)
+            ? Math.round(parsedEstimatedUsd * 100)
+            : 2;
       const enrichedRun: ExtendedAgentRun = {
         ...runRecord,
         is_dry_run: dryRun || Boolean(runRecord.is_dry_run),
-        cost_cents: dryRun ? 0 : (runRecord.cost_cents ?? 2),
+        cost_cents: resolvedCostCents,
         trigger_type: runRecord.trigger_type ?? (dryRun ? 'dry_run' : 'manual'),
       };
       setLocalRunsOverlay((prev) => [
@@ -401,16 +453,35 @@ export function KnightsPage(): React.ReactElement {
   const handleForgeSubmit = async (
     payload: CreateAgentPayload,
     pendingTrigger?: CreateAgentTriggerPayload,
+    pendingTriggers?: CreateAgentTriggerPayload[],
   ) => {
     setIsSubmittingForge(true);
     try {
       if (forgeMode === 'create') {
+        const triggersToCreate =
+          Array.isArray(pendingTriggers) && pendingTriggers.length > 0
+            ? pendingTriggers
+            : pendingTrigger
+              ? [pendingTrigger]
+              : [];
         try {
           const created = await createAgent(payload);
-          if (pendingTrigger) {
-            await createAgentTrigger(created.id, pendingTrigger).catch(() => {});
+          const createdTriggers: AgentTrigger[] = [];
+          for (const trig of triggersToCreate) {
+            try {
+              const t = await createAgentTrigger(created.id, trig);
+              if (t && typeof t === 'object' && typeof t.id === 'string') {
+                createdTriggers.push(t);
+              }
+            } catch {
+              // ignore individual trigger error
+            }
           }
-          setLocalKnightsOverlay((prev) => [...(prev ?? rawKnights), created]);
+          const createdWithTriggers: AgentWithTelemetry =
+            createdTriggers.length > 0
+              ? { ...created, triggers: [...(created.triggers ?? []), ...createdTriggers] }
+              : created;
+          setLocalKnightsOverlay((prev) => [...(prev ?? rawKnights), createdWithTriggers]);
           setSelectedKnightId(created.id);
           setStatusMessage(`Forged & deployed ${created.name} to ${payload.zone}.`);
         } catch {
@@ -435,6 +506,7 @@ export function KnightsPage(): React.ReactElement {
               model: 'claude-sonnet-4-20250514',
               thinking_effort: 'high',
               max_context_tokens: 128000,
+              ep_daily_tokens: 128000,
             },
             tools_policy: payload.tools_policy ?? {},
             monthly_budget_cents: budget,
@@ -457,9 +529,29 @@ export function KnightsPage(): React.ReactElement {
           setStatusMessage(`Forged & deployed ${fallbackCreated.name} to ${targetZone}.`);
         }
       } else if (selectedKnight) {
-        setMutatedKnightIds((prev) => new Set(prev).add(selectedKnight.id));
+        const targetZone = normalizeArenaZone(payload.zone ?? selectedKnight.zone);
         const nextBudget = payload.monthly_budget_cents ?? selectedKnight.budgetCents;
         const nextRemaining = Math.max(0, nextBudget - selectedKnight.spentCents);
+        const forgePatch: Partial<AgentWithTelemetry> = {
+          name: payload.name,
+          knight_archetype: payload.knight_archetype as any,
+          crest_color: payload.crest_color || selectedKnight.crestColor,
+          system_prompt: payload.system_prompt,
+          ...(payload.model_config ? { model_config: payload.model_config } : {}),
+          ...(payload.tools_policy ? { tools_policy: payload.tools_policy } : {}),
+          monthly_budget_cents: nextBudget,
+          grid_pos: {
+            x: payload.grid_pos?.x ?? selectedKnight.gridX,
+            y: payload.grid_pos?.y ?? selectedKnight.gridY,
+            zone: targetZone,
+          },
+          enabled: payload.enabled ?? targetZone !== 'standby_barracks',
+          is_paused: payload.is_paused ?? targetZone === 'standby_barracks',
+        };
+        setLocalKnightPatches((prev) => ({
+          ...prev,
+          [selectedKnight.id]: { ...prev[selectedKnight.id], ...forgePatch },
+        }));
         try {
           const updated = await updateAgent(selectedKnight.id, payload);
           setLocalKnightsOverlay((prev) =>
@@ -468,7 +560,7 @@ export function KnightsPage(): React.ReactElement {
                 ? {
                     ...k,
                     ...updated,
-                    monthly_budget_cents: nextBudget,
+                    ...forgePatch,
                     hp_remaining_cents: nextRemaining,
                     hp_pct:
                       nextBudget <= 0 ? 0 : Math.round((nextRemaining / nextBudget) * 100),
@@ -478,26 +570,15 @@ export function KnightsPage(): React.ReactElement {
           );
           setStatusMessage(`Saved configuration for ${updated.name}.`);
         } catch {
-          const targetZone = normalizeArenaZone(payload.zone ?? selectedKnight.zone);
           setLocalKnightsOverlay((prev) =>
             (prev ?? rawKnights).map((k) =>
               k.id === selectedKnight.id
                 ? {
                     ...k,
-                    name: payload.name,
-                    knight_archetype: payload.knight_archetype as any,
-                    crest_color: payload.crest_color || k.crest_color,
-                    system_prompt: payload.system_prompt,
-                    tools_policy: payload.tools_policy ?? k.tools_policy,
-                    monthly_budget_cents: nextBudget,
+                    ...forgePatch,
                     hp_remaining_cents: nextRemaining,
                     hp_pct:
                       nextBudget <= 0 ? 0 : Math.round((nextRemaining / nextBudget) * 100),
-                    grid_pos: {
-                      x: payload.grid_pos?.x ?? k.grid_pos.x,
-                      y: payload.grid_pos?.y ?? k.grid_pos.y,
-                      zone: targetZone,
-                    },
                   }
                 : k,
             ),
@@ -530,7 +611,19 @@ export function KnightsPage(): React.ReactElement {
 
   const handleAddTrigger = async (knightId: string, trigger: CreateAgentTriggerPayload) => {
     try {
-      await createAgentTrigger(knightId, trigger);
+      const created = await createAgentTrigger(knightId, trigger);
+      if (created && typeof created === 'object' && typeof created.id === 'string') {
+        queryClient.setQueryData<AgentTrigger[]>(['agent-triggers', knightId], (prev) =>
+          Array.isArray(prev) ? [...prev.filter((t) => t.id !== created.id), created] : [created],
+        );
+        setLocalKnightsOverlay((prev) =>
+          (prev ?? rawKnights).map((k) =>
+            k.id === knightId
+              ? { ...k, triggers: [...(k.triggers ?? []).filter((t) => t.id !== created.id), created] }
+              : k,
+          ),
+        );
+      }
       await queryClient.invalidateQueries({ queryKey: ['agent-triggers', knightId] });
       await queryClient.invalidateQueries({ queryKey: ['agents-queue'] });
       setStatusMessage(`Attached ${trigger.type} trigger to Knight.`);
@@ -540,6 +633,27 @@ export function KnightsPage(): React.ReactElement {
   };
 
   const handleDeleteTrigger = async (knightId: string, triggerId: string) => {
+    queryClient.setQueryData<AgentTrigger[]>(['agent-triggers', knightId], (prev) =>
+      Array.isArray(prev) ? prev.filter((t) => t.id !== triggerId) : [],
+    );
+    setLocalKnightsOverlay((prev) =>
+      (prev ?? rawKnights).map((k) =>
+        k.id === knightId
+          ? { ...k, triggers: (k.triggers ?? []).filter((t) => t.id !== triggerId) }
+          : k,
+      ),
+    );
+    setLocalKnightPatches((prev) => {
+      const existing = prev[knightId];
+      if (!existing?.triggers) return prev;
+      return {
+        ...prev,
+        [knightId]: {
+          ...existing,
+          triggers: existing.triggers.filter((t) => t.id !== triggerId),
+        },
+      };
+    });
     try {
       await deleteAgentTrigger(knightId, triggerId);
       await queryClient.invalidateQueries({ queryKey: ['agent-triggers', knightId] });

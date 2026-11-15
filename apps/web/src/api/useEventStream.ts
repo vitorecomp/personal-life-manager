@@ -101,10 +101,23 @@ export function useEventStream(): void {
           }
         }
         if (parsedType === 'knight_run_updated' && parsedData) {
+          const rawAgentId = parsedData.agent_id ?? parsedData.agentId;
+          const rawAgentSlug = parsedData.agent_slug ?? parsedData.agentSlug;
+          const rawRunId = parsedData.run_id ?? parsedData.runId;
+          const normAgentId =
+            rawAgentId !== undefined && rawAgentId !== null ? String(rawAgentId) : undefined;
+          const normAgentSlug =
+            rawAgentSlug !== undefined && rawAgentSlug !== null ? String(rawAgentSlug) : undefined;
+          const normRunId =
+            rawRunId !== undefined && rawRunId !== null ? String(rawRunId) : undefined;
           queryClient.setQueryData(['knight-live-cast'], {
-            agent_id: parsedData.agent_id ? String(parsedData.agent_id) : undefined,
-            agent_slug: parsedData.agent_slug ? String(parsedData.agent_slug) : undefined,
-            run_id: parsedData.run_id ? String(parsedData.run_id) : undefined,
+            ...parsedData,
+            agent_id: normAgentId,
+            agentId: normAgentId,
+            agent_slug: normAgentSlug,
+            agentSlug: normAgentSlug,
+            run_id: normRunId,
+            runId: normRunId,
             status: parsedData.status ? String(parsedData.status) : 'running',
             receivedAt: Date.now(),
           });

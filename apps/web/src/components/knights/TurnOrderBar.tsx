@@ -268,7 +268,10 @@ export function TurnOrderBar({
                 ▼ [ACTIVE]
               </span>
               <span style={{ color: FUI_TOKENS.accentCyan, fontSize: '12px' }}>
-                {castingKnightId === activeKnight.id ? 'CASTING_SSE' : activeKnight.archetype.toUpperCase()}
+                {castingKnightId &&
+                (castingKnightId === activeKnight.id || castingKnightId === activeKnight.slug)
+                  ? 'CASTING_SSE'
+                  : activeKnight.archetype.toUpperCase()}
               </span>
             </div>
             <span style={{ fontWeight: 700, fontSize: '13px', color: FUI_TOKENS.inkStark }}>

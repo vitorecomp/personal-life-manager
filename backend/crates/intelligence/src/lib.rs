@@ -1214,4 +1214,104 @@ mod tests {
 
         test_db.teardown().await;
     }
+
+    #[test]
+    fn adv_f09_f10_gateway_inline_thinking_orphan_tag_mcp_directive_and_knight_policy() {
+        use crate::gateway::{extract_inline_thinking, parse_inline_mcp_directive};
+        use crate::mcp::{
+            McpCallContext, classify_tool_autonomy, evaluate_effective_autonomy_tier,
+            mcp_tool_catalog,
+        };
+        use hermes_domain::McpAutonomyTier;
+
+        // 1. Orphan `</thinking>` before `<thinking>...</thinking>` must still extract thinking block
+        let raw = "Note about </thinking> tag.\n<thinking>\nDeep tactical reasoning\n</thinking>\nFinal synthesis.";
+        let (think, rest) = extract_inline_thinking(raw).expect("must extract thinking");
+        assert_eq!(think, "Deep tactical reasoning");
+        assert!(rest.contains("Note about </thinking> tag."));
+        assert!(rest.contains("Final synthesis."));
+
+        // 2. Inline `/mcp` directive parsing with and without JSON args
+        let d1 = parse_inline_mcp_directive("/mcp todos_list_tasks").unwrap();
+        assert_eq!(d1.name, "todos_list_tasks");
+        assert_eq!(d1.arguments, serde_json::json!({}));
+
+        let d2 = parse_inline_mcp_directive("/mcp todos_create_task {\"title\":\"Ship\"}").unwrap();
+        assert_eq!(d2.name, "todos_create_task");
+        assert_eq!(d2.arguments["title"], "Ship");
+        assert!(parse_inline_mcp_directive("/mcp   ").is_none());
+
+        // 3. `evaluate_effective_autonomy_tier`: dynamic widget escalation & Finance Write-Gate under AUTO
+        let catalog = mcp_tool_catalog();
+        let add_widget = catalog
+            .iter()
+            .find(|t| t.name == "dashboards_add_widget")
+            .unwrap();
+        assert_eq!(
+            evaluate_effective_autonomy_tier(
+                add_widget,
+                &serde_json::json!({"source_kind": "builtin"}),
+                &McpCallContext::default()
+            )
+            .unwrap(),
+            McpAutonomyTier::ImmediateUndo
+        );
+        for dangerous_kind in ["command", "sql"] {
+            assert_eq!(
+                evaluate_effective_autonomy_tier(
+                    add_widget,
+                    &serde_json::json!({"source_kind": dangerous_kind}),
+                    &McpCallContext::default()
+                )
+                .unwrap(),
+                McpAutonomyTier::RequireApproval
+            );
+        }
+
+        // Finance Write-Gate invariant: even under Knight `AUTO` policy, finance_* writes require approval
+        let fin_upsert = catalog
+            .iter()
+            .find(|t| t.name == "finance_upsert_asset")
+            .unwrap();
+        let auto_ctx = McpCallContext {
+            session_key: "knight-auto".to_string(),
+            agent_run_id: None,
+            knight_policy: Some(serde_json::json!({"*": "AUTO", "finance.*": "AUTO"})),
+            allowed_tools: Some(vec!["finance.*".to_string()]),
+            bypass_approval_gate: false,
+        };
+        assert_eq!(
+            evaluate_effective_autonomy_tier(fin_upsert, &serde_json::json!({}), &auto_ctx)
+                .unwrap(),
+            McpAutonomyTier::RequireApproval
+        );
+
+        // Unauthorized tool rejected with 403 when not in allowed_tools
+        let restricted_ctx = McpCallContext {
+            allowed_tools: Some(vec!["todos.*".to_string()]),
+            ..McpCallContext::default()
+        };
+        assert!(
+            evaluate_effective_autonomy_tier(fin_upsert, &serde_json::json!({}), &restricted_ctx)
+                .is_err()
+        );
+
+        // READ-only Knight policy rejects mutating tools
+        let read_only_ctx = McpCallContext {
+            knight_policy: Some(serde_json::json!("READ")),
+            ..McpCallContext::default()
+        };
+        let create_task = catalog
+            .iter()
+            .find(|t| t.name == "todos_create_task")
+            .unwrap();
+        assert!(
+            evaluate_effective_autonomy_tier(create_task, &serde_json::json!({}), &read_only_ctx)
+                .is_err()
+        );
+        assert_eq!(
+            classify_tool_autonomy("unknown_tool", &serde_json::json!({})),
+            McpAutonomyTier::RequireApproval
+        );
+    }
 }

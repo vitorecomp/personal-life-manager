@@ -1712,7 +1712,7 @@ fn extract_existing_keep_blocks(target_path: &Path) -> String {
     kept.join("\n\n")
 }
 
-pub(crate) fn atomic_write_markdown(target_path: &Path, content: &str) -> Result<(), ApiError> {
+pub fn atomic_write_markdown(target_path: &Path, content: &str) -> Result<(), ApiError> {
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             ApiError::internal(format!(
@@ -1725,12 +1725,10 @@ pub(crate) fn atomic_write_markdown(target_path: &Path, content: &str) -> Result
     let managed_start = "<!-- hermes:managed:start -->";
     let managed_end = "<!-- hermes:managed:end -->";
     let base_merged = if let Ok(existing) = std::fs::read_to_string(target_path) {
-        if let (Some(s_idx), Some(e_rel)) = (
-            existing.find(managed_start),
-            existing.find(managed_end),
-        ) && e_rel >= s_idx
+        if let Some(s_idx) = existing.find(managed_start)
+            && let Some(rel_end) = existing[s_idx + managed_start.len()..].find(managed_end)
         {
-            let after_end = e_rel + managed_end.len();
+            let after_end = s_idx + managed_start.len() + rel_end + managed_end.len();
             let prefix = &existing[..s_idx];
             let suffix = &existing[after_end..];
             format!(

@@ -180,4 +180,57 @@ describe('todosModel — Pure Model & Geometry Suite (F28)', () => {
     });
     expect(cycleMsg).toContain('422 CYCLE_DETECTED');
   });
+
+  it('adv_parseInlineQuickCapture_enforces_duration_and_relative_day_bounds_and_leap_year_validation', () => {
+    const valid = parseInlineQuickCapture(
+      'Deep work 24h in 365 days 2024-02-29 !urgent #ops',
+      '2026-11-15',
+    );
+    expect(valid.estimated_minutes).toBe(1440);
+    expect(valid.priority).toBe('urgent');
+    expect(valid.tags).toEqual(['ops']);
+    expect(valid.scheduled_date).toBe('2024-02-29');
+
+    const outOfBounds = parseInlineQuickCapture(
+      'Invalid 25h 0m in 3651 days 2026-02-29',
+      '2026-11-15',
+    );
+    expect(outOfBounds.estimated_minutes).toBeUndefined();
+    expect(outOfBounds.scheduled_date).toBeUndefined();
+  });
+
+  it('adv_buildSignalListGraph_and_extractCycleDetectedError_handle_off_view_blockers_and_nested_errors', () => {
+    const allTasks: TodoTask[] = [
+      {
+        id: 't-hidden',
+        title: 'Off-view Blocker',
+        description_md: '',
+        status: 'todo',
+        priority: 'high',
+        tags: [],
+        blocked_by_task_ids: [],
+        actual_seconds: 0,
+      },
+      {
+        id: 't-visible',
+        title: 'Visible Dependent',
+        description_md: '',
+        status: 'todo',
+        priority: 'medium',
+        tags: [],
+        blocked_by_task_ids: ['t-hidden'],
+        actual_seconds: 0,
+      },
+    ];
+    const graph = buildSignalListGraph([allTasks[1]!], allTasks);
+    expect(graph.rows[0]?.isBlocked).toBe(true);
+    expect(graph.rows[0]?.blockers[0]?.resolved).toBe(false);
+
+    expect(
+      extractCycleDetectedError({
+        status: 422,
+        body: { error: 'CYCLE_DETECTED: Dependency cycle t1 -> t2 -> t1' },
+      }),
+    ).toContain('CYCLE_DETECTED');
+  });
 });

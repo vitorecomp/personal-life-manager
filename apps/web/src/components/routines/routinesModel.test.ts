@@ -270,4 +270,70 @@ describe('routinesModel — F29 Pure Domain Logic & Boundary Guards', () => {
     expect(hostileMetrics.weekEnd).toBe('2026-11-15');
     expect(hostileMetrics.vaultExportPath).toBe('Reviews/2026-W46.md');
   });
+
+  it('adv_normalizeHeatmap365d_assigns_5_color_tiers_and_falls_back_to_completed_over_total', () => {
+    const cells = normalizeHeatmap365d([
+      { date: '2026-11-11', completed_count: 0, total_count: 4, completion_ratio: 0 },
+      { date: '2026-11-12', completed_count: 1, total_count: 5, completion_ratio: 0 },
+      { date: '2026-11-13', completed_count: 2, total_count: 4, completion_ratio: 0 },
+      { date: '2026-11-14', completed_count: 3, total_count: 4, completion_ratio: 0 },
+      { date: '2026-11-15', completed_count: 4, total_count: 4, completion_ratio: 0 },
+    ]);
+    expect(cells.length).toBe(365);
+    expect(cells[0]?.fillHex).toBe('#13151A');
+    expect(cells[1]?.fillHex).toBe('#1F4B57');
+    expect(cells[2]?.fillHex).toBe('#2CE5F2');
+    expect(cells[3]?.fillHex).toBe('#A8F040');
+    expect(cells[4]?.fillHex).toBe('#F87C18');
+  });
+
+  it('adv_validateIdealWeekBlock_allows_editing_block_self_overlap_and_formats_weekly_review', () => {
+    const existing = [
+      {
+        id: 'blk-1',
+        day_of_week: 0,
+        start_time: '09:00',
+        end_time: '11:00',
+        category: 'deep_work' as const,
+        label: 'Morning Focus',
+      },
+    ];
+    expect(
+      validateIdealWeekBlock(
+        {
+          day_of_week: 0,
+          start_time: '09:30',
+          end_time: '10:30',
+          category: 'deep_work',
+          label: 'Edit Self',
+        },
+        existing,
+        'blk-1',
+      ),
+    ).toEqual({ valid: true, error: null });
+
+    const peerOverlap = validateIdealWeekBlock(
+      {
+        day_of_week: 0,
+        start_time: '09:30',
+        end_time: '10:30',
+        category: 'deep_work',
+        label: 'Peer Clash',
+      },
+      existing,
+    );
+    expect(peerOverlap.valid).toBe(false);
+    expect(peerOverlap.error).toContain('OVERLAP_DETECTED');
+
+    expect(parseTimeMinutes('13:35:00')).toBe(815);
+    expect(parseTimeMinutes('25:00')).toBeNull();
+
+    const metrics = formatWeeklyReviewMetrics({
+      iso_week: 'NaN',
+      focus_minutes: 90,
+      investable_surplus_cents: 250000,
+    });
+    expect(metrics.isoWeek).toBe('2026-W46');
+    expect(metrics.focusReadout).toBe('1.5h (90m)');
+  });
 });

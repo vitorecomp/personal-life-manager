@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BinaryDotMatrix8x12,
   CandlestickChart,
@@ -218,5 +218,38 @@ describe('F22 — Shared Tactical Telemetry & Finance Visual Charts', () => {
     expect(container.querySelector('[data-donut-part="center-label"]')).toHaveTextContent('34%');
     expect(container.querySelector('[data-donut-part="duration-label"]')).toHaveTextContent('7Y 4M');
     expect(container.querySelector('[data-bar-part="savings-rate"]')).toHaveTextContent('SAVINGS: 55%');
+  });
+
+  it('adv_candlestick_and_paired_hatch_bar_range_tabs_investment_mode_and_peak_leader', () => {
+    const onRangeChange = vi.fn();
+    render(
+      <div>
+        <CandlestickChart
+          symbol="PETR4"
+          range="1M"
+          onRangeChange={onRangeChange}
+          candles={[
+            { timestamp: '2026-11-01', open: 35, high: 38, low: 34, close: 37, volume: 1200 },
+            { timestamp: '2026-11-02', open: 37, high: 37.5, low: 33, close: 34, volume: 1500 },
+          ]}
+        />
+        <PairedHatchBarChart
+          title="MONTHLY INVESTMENT TARGET"
+          mode="investment"
+          data={[
+            { month: '2026-10', planned: 5000, actual: 6000, income: 15000 },
+            { month: '2026-11', planned: 5000, actual: 3000, income: 15000 },
+          ]}
+        />
+        <WaveformSparkline data={[0, 15, 45, 10]} variant="area" />
+      </div>,
+    );
+
+    const range7D = screen.getByRole('button', { name: '7D' });
+    fireEvent.click(range7D);
+    expect(onRangeChange).toHaveBeenCalledWith('7D');
+    expect(document.querySelector('[data-fui="candlestick-chart"]')).toBeTruthy();
+    expect(document.querySelector('[data-fui="paired-hatch-bar-chart"]')).toBeTruthy();
+    expect(document.querySelector('[data-fui="waveform-sparkline"]')).toBeTruthy();
   });
 });

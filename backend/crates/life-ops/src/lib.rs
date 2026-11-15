@@ -2396,4 +2396,148 @@ mod tests {
 
         test_db.teardown().await;
     }
+
+    #[test]
+    fn adv_f16_redact_secrets_pem_query_delim_midword_sk_and_pat() {
+        use crate::courses::{redact_secrets, redact_secrets_with_prefix};
+
+        let fake_gapi = format!("{}{}", "AIzaSyA", "bCdEfGhIjKlMnOpQrStUvWxYz012345");
+        let fake_openai = format!("{}{}", "sk-proj-", "1234567890abcdefghij");
+        let pem_begin = format!("-----BEGIN RSA {}-----", "PRIVATE KEY");
+        let pem_end = format!("-----END RSA {}-----", "PRIVATE KEY");
+
+        // 1. Query-string '&' delimiter stops token capture while preserving trailing params
+        let url_note = format!(
+            "Fetch https://googleapis.com/youtube/v3/playlists?key={fake_gapi}&hl=en&part=snippet"
+        );
+        let redacted_url = redact_secrets(&url_note);
+        assert_eq!(
+            redacted_url,
+            "Fetch https://googleapis.com/youtube/v3/playlists?key=[redacted Google API key]&hl=en&part=snippet"
+        );
+        assert_eq!(
+            redact_secrets_with_prefix(
+                &format!("?token={fake_openai}&mode=test"),
+                "sk-",
+                16,
+                120,
+                "[redacted API key]"
+            ),
+            "?token=[redacted API key]&mode=test"
+        );
+
+        // 2. Mid-word 'sk-' in hyphenated technical compound words must NEVER be corrupted
+        let technical_prose = "Study task-management-architecture, flask-sqlalchemy-migrations, and disk-partitioning-strategy.";
+        assert_eq!(redact_secrets(technical_prose), technical_prose);
+
+        // 3. Standalone 'sk-', 'plm_pat_', 'hermes_sess_', 'ghp_', 'AKIA', 'xoxb-' are redacted
+        let secrets_blob = format!(
+            "Keys: {fake_openai}, plm_pat_0123456789abcdef0123456789abcdef, hermes_sess_0123456789abcdef0123456789abcdef"
+        );
+        let redacted_blob = redact_secrets(&secrets_blob);
+        assert!(redacted_blob.contains("[redacted API key]"));
+        assert!(redacted_blob.contains("[redacted PAT]"));
+        assert!(redacted_blob.contains("[redacted session token]"));
+        assert!(!redacted_blob.contains("plm_pat_"));
+        assert!(!redacted_blob.contains("hermes_sess_"));
+
+        // 4. Non-private-key BEGIN CERTIFICATE before BEGIN RSA PRIVATE KEY preserves intermediate prose
+        let multi_pem = format!(
+            "-----BEGIN CERTIFICATE-----\nCERT_DATA\n-----END CERTIFICATE-----\nKeep this middle note\n{pem_begin}\nSECRET_KEY_DATA\n{pem_end}\nTail"
+        );
+        let redacted_pem = redact_secrets(&multi_pem);
+        assert!(redacted_pem.contains("-----BEGIN CERTIFICATE-----"));
+        assert!(redacted_pem.contains("Keep this middle note"));
+        assert!(redacted_pem.contains("[redacted private key]"));
+        assert!(!redacted_pem.contains("SECRET_KEY_DATA"));
+        assert!(!redacted_pem.contains(&pem_end));
+    }
+
+    #[test]
+    fn adv_f13_quick_capture_and_syllabus_duration_overflow_and_boundary_guards() {
+        use crate::courses::parse_syllabus_outline;
+        use crate::todos::parse_quick_capture_with_today;
+        use chrono::NaiveDate;
+
+        let today = NaiveDate::from_ymd_opt(2026, 11, 15).unwrap(); // Sunday
+
+        // 1. Overflow duration inputs must never panic and must be ignored as title words
+        let huge_dur = parse_quick_capture_with_today("Deep work 50000000h30m", today).unwrap();
+        assert_eq!(huge_dur.estimated_minutes, None);
+
+        let valid_combo = parse_quick_capture_with_today("Deep work ~1h30m", today).unwrap();
+        assert_eq!(valid_combo.estimated_minutes, Some(90));
+
+        // 2. Overflow relative days ('in 999999999 days') must never panic
+        let huge_days =
+            parse_quick_capture_with_today("Follow up in 999999999 days", today).unwrap();
+        assert_eq!(huge_days.scheduled_date, None);
+
+        let valid_days = parse_quick_capture_with_today("Follow up in 5 days", today).unwrap();
+        assert_eq!(
+            valid_days.scheduled_date,
+            NaiveDate::from_ymd_opt(2026, 11, 20)
+        );
+
+        // 3. All-token input falls back to "Untitled Task"
+        let all_tokens =
+            parse_quick_capture_with_today("#ops +infra @deep !p1 tomorrow 45m", today).unwrap();
+        assert_eq!(all_tokens.clean_title, "Untitled Task");
+        assert_eq!(all_tokens.project_hint.as_deref(), Some("infra"));
+        assert_eq!(all_tokens.tags, vec!["ops".to_string()]);
+        assert_eq!(all_tokens.estimated_minutes, Some(45));
+
+        // 4. Syllabus outline parser handles MM:SS, HH:MM:SS, and huge overflow without panicking
+        let modules = parse_syllabus_outline(
+            "# Module 1\n- Intro (14:30)\n- Deep Dive (1:30:00)\n- Overflow (50000000:30:00)",
+        );
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].1[0], ("Intro".to_string(), 15));
+        assert_eq!(modules[0].1[1], ("Deep Dive".to_string(), 90));
+        assert_eq!(
+            modules[0].1[2],
+            ("Overflow (50000000:30:00)".to_string(), 15)
+        );
+    }
+
+    #[test]
+    fn adv_f14_atomic_write_markdown_orphan_end_marker_and_custom_sql_security() {
+        use crate::dashboards::{
+            validate_custom_sql_query, validate_dashboard_fields, validate_grid_rect,
+        };
+        use crate::routines::atomic_write_markdown;
+        use hermes_domain::dashboards::GridRect;
+
+        // 1. Orphan `<!-- hermes:managed:end -->` above `<!-- hermes:managed:start -->`
+        let temp_dir = std::env::temp_dir().join(format!("hermes_adv_md_{}", new_uuid_v7()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let md_path = temp_dir.join("checkin.md");
+        let initial = "# User Header\nOrphan marker: <!-- hermes:managed:end -->\n\n<!-- hermes:managed:start -->\nOLD_MANAGED_CONTENT\n<!-- hermes:managed:end -->\n# User Footer\n";
+        std::fs::write(&md_path, initial).unwrap();
+
+        atomic_write_markdown(&md_path, "NEW_MANAGED_CONTENT").unwrap();
+
+        let updated = std::fs::read_to_string(&md_path).unwrap();
+        assert!(updated.contains("# User Header"));
+        assert!(updated.contains("Orphan marker: <!-- hermes:managed:end -->"));
+        assert!(updated.contains("NEW_MANAGED_CONTENT"));
+        assert!(!updated.contains("OLD_MANAGED_CONTENT"));
+        assert!(updated.contains("# User Footer"));
+        assert_eq!(updated.matches("<!-- hermes:managed:start -->").count(), 1);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        // 2. Custom SQL security & dashboard rect bounds
+        assert!(validate_custom_sql_query("SELECT 1 -- comment").is_err());
+        assert!(validate_custom_sql_query("SELECT /* block */ 1").is_err());
+        assert!(validate_custom_sql_query("SELECT 1; SELECT 2").is_err());
+        assert!(validate_custom_sql_query("DELETE FROM tasks").is_err());
+        assert!(validate_custom_sql_query("SELECT * FROM api_tokens").is_err());
+        assert!(validate_custom_sql_query("SELECT * FROM web_sessions").is_err());
+        assert!(validate_custom_sql_query("WITH t AS (SELECT 1) SELECT * FROM t;").is_ok());
+
+        assert!(validate_dashboard_fields("Ops", "ops", 4, 12, 8).is_err());
+        assert!(validate_dashboard_fields("Ops", "ops", 5, 12, 8).is_ok());
+        assert!(validate_grid_rect(&GridRect { x: 9, y: 0, w: 4, h: 2 }, 12, 8).is_err());
+        assert!(validate_grid_rect(&GridRect { x: 8, y: 0, w: 4, h: 2 }, 12, 8).is_ok());
+    }
 }

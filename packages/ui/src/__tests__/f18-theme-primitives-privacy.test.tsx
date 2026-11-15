@@ -20,6 +20,7 @@ import {
   FuiSelect,
   FuiTabs,
   formatMaskedCurrency,
+  isNonCurrencyToken,
   PrivacyMaskProvider,
   PrivacyMaskToggle,
   PrivacyValue,
@@ -235,5 +236,57 @@ describe('F18 — REF-02 Tactical FUI Theme, 0px Primitives & Privacy Mask', () 
     expect(screen.getByTestId('val-ratio')).toHaveTextContent('12/16');
     expect(screen.getByTestId('val-count')).toHaveTextContent('200');
     expect(screen.getByTestId('val-duration')).toHaveTextContent('7Y 4M');
+  });
+
+  it('adv_fui_tabs_arrow_left_wrap_and_disabled_skip_and_privacy_mask_non_currency_autodetect', () => {
+    const onTabChange = vi.fn();
+    render(
+      <PrivacyMaskProvider defaultMasked={true} storageKey={null}>
+        <div>
+          <FuiTabs
+            tabs={[
+              { id: 'tab-a', label: 'ALPHA' },
+              { id: 'tab-b', label: 'BETA_DISABLED', disabled: true },
+              { id: 'tab-c', label: 'GAMMA' },
+            ]}
+            activeTab="tab-a"
+            onTabChange={onTabChange}
+          />
+          <span data-testid="neg-brl">
+            <PrivacyValue value="-R$ 450,00" />
+          </span>
+          <span data-testid="neg-usd">
+            <PrivacyValue value="-$ 1,200.50" />
+          </span>
+          <span data-testid="non-currency-pct">
+            <PrivacyValue value="64.2%" />
+          </span>
+          <span data-testid="non-currency-dur">
+            <PrivacyValue value="7Y 4M" />
+          </span>
+        </div>
+      </PrivacyMaskProvider>,
+    );
+
+    expect(isNonCurrencyToken('64.2%')).toBe(true);
+    expect(isNonCurrencyToken('7Y 4M')).toBe(true);
+    expect(isNonCurrencyToken('R$ 450,00')).toBe(false);
+
+    expect(screen.getByTestId('neg-brl').textContent).toContain('••••••');
+    expect(screen.getByTestId('neg-usd').textContent).toContain('••••••');
+    expect(screen.getByTestId('non-currency-pct').textContent).toBe('64.2%');
+    expect(screen.getByTestId('non-currency-dur').textContent).toBe('7Y 4M');
+
+    const tabs = screen.getAllByRole('tab');
+    fireEvent.keyDown(tabs[0]!, { key: 'ArrowRight' });
+    expect(onTabChange).toHaveBeenLastCalledWith('tab-c');
+
+    fireEvent.keyDown(tabs[0]!, { key: 'ArrowLeft' });
+    expect(onTabChange).toHaveBeenLastCalledWith('tab-c');
+
+    fireEvent.keyDown(tabs[0]!, { key: 'End' });
+    expect(onTabChange).toHaveBeenLastCalledWith('tab-c');
+    fireEvent.keyDown(tabs[2]!, { key: 'Home' });
+    expect(onTabChange).toHaveBeenLastCalledWith('tab-a');
   });
 });

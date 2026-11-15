@@ -1249,7 +1249,7 @@ impl LifeOpsService {
 
         let (new_stage, next_review_date) = match effective_action {
             SpacedReviewAction::Snooze => {
-                let days = req.snooze_days.unwrap_or(3).max(1);
+                let days = req.snooze_days.unwrap_or(3).clamp(1, 365);
                 (existing.review_stage, Some(today + Duration::days(days)))
             }
             SpacedReviewAction::Again => (0_i16, Some(today + Duration::days(7))),
@@ -1388,11 +1388,18 @@ fn parse_duration_minutes(raw: &str) -> Option<i32> {
         if parts.len() == 2 {
             let m = parts[0].parse::<i32>().ok()?;
             let sec = parts[1].parse::<i32>().ok()?;
-            return Some((m + i32::from(sec >= 30)).max(1));
+            if (0..=14_400).contains(&m) && (0..60).contains(&sec) {
+                return Some((m + i32::from(sec >= 30)).max(1));
+            }
+            return None;
         } else if parts.len() == 3 {
             let h = parts[0].parse::<i32>().ok()?;
             let m = parts[1].parse::<i32>().ok()?;
-            return Some((h * 60 + m).max(1));
+            let sec = parts[2].parse::<i32>().ok()?;
+            if (0..=240).contains(&h) && (0..60).contains(&m) && (0..60).contains(&sec) {
+                return Some((h * 60 + m + i32::from(sec >= 30)).max(1));
+            }
+            return None;
         }
     }
 
@@ -1404,22 +1411,25 @@ fn parse_duration_minutes(raw: &str) -> Option<i32> {
             .or_else(|| token.strip_suffix("hrs"))
             .or_else(|| token.strip_suffix('h'))
             && let Ok(h) = num.parse::<f64>()
+            && h.is_finite()
+            && (0.0..=240.0).contains(&h)
         {
-            total_min += (h * 60.0).round() as i32;
+            total_min = total_min.saturating_add((h * 60.0).round() as i32);
             matched = true;
         } else if let Some(num) = token
             .strip_suffix("min")
             .or_else(|| token.strip_suffix("mins"))
             .or_else(|| token.strip_suffix('m'))
             && let Ok(m) = num.parse::<i32>()
+            && (0..=14_400).contains(&m)
         {
-            total_min += m;
+            total_min = total_min.saturating_add(m);
             matched = true;
         }
     }
 
     if matched && total_min > 0 {
-        Some(total_min)
+        Some(total_min.min(14_400))
     } else {
         None
     }
@@ -2058,9 +2068,18 @@ fn strip_markdown_frontmatter(raw: &str) -> String {
 /// Redacts common credential patterns matching `crawlers/youtube-ai/utils/secrets.py`.
 pub fn redact_secrets(text: &str) -> String {
     let mut out = text.to_string();
+    let mut search_from = 0usize;
 
-    while let Some(start) = out.find("-----BEGIN ") {
-        if let Some(priv_idx) = out[start..].find("PRIVATE KEY-----") {
+    while search_from < out.len() {
+        let Some(rel_start) = out[search_from..].find("-----BEGIN ") else {
+            break;
+        };
+        let start = search_from + rel_start;
+        let header_line_end = out[start..]
+            .find('\n')
+            .map(|nl| start + nl)
+            .unwrap_or(out.len());
+        if let Some(priv_idx) = out[start..header_line_end].find("PRIVATE KEY-----") {
             let search_end_from = start + priv_idx + "PRIVATE KEY-----".len();
             if let Some(end_marker) = out[search_end_from..].find("-----END ")
                 && let Some(end_finish) =
@@ -2068,11 +2087,13 @@ pub fn redact_secrets(text: &str) -> String {
             {
                 let full_end =
                     search_end_from + end_marker + end_finish + "PRIVATE KEY-----".len();
-                out.replace_range(start..full_end, "[redacted private key]");
+                let replacement = "[redacted private key]";
+                out.replace_range(start..full_end, replacement);
+                search_from = start + replacement.len();
                 continue;
             }
         }
-        break;
+        search_from = header_line_end.max(start + "-----BEGIN ".len());
     }
 
     out = redact_prefixed_token(&out, "AIza", 20, 60, "[redacted Google API key]");
@@ -2086,8 +2107,20 @@ pub fn redact_secrets(text: &str) -> String {
     out = redact_prefixed_token(&out, "github_pat_", 30, 120, "[redacted GitHub token]");
     out = redact_prefixed_token(&out, "xoxb-", 12, 100, "[redacted Slack token]");
     out = redact_prefixed_token(&out, "xoxp-", 12, 100, "[redacted Slack token]");
+    out = redact_prefixed_token(&out, "plm_pat_", 16, 80, "[redacted PAT]");
+    out = redact_prefixed_token(&out, "hermes_sess_", 20, 80, "[redacted session token]");
 
     out
+}
+
+pub fn redact_secrets_with_prefix(
+    input: &str,
+    prefix: &str,
+    min_len: usize,
+    max_len: usize,
+    replacement: &str,
+) -> String {
+    redact_prefixed_token(input, prefix, min_len, max_len, replacement)
 }
 
 fn redact_prefixed_token(
@@ -2101,14 +2134,24 @@ fn redact_prefixed_token(
     let mut rest = input;
 
     while let Some(idx) = rest.find(prefix) {
+        let valid_start = rest[..idx]
+            .chars()
+            .next_back()
+            .map_or(true, |c| !c.is_ascii_alphanumeric());
         result.push_str(&rest[..idx]);
         let after_prefix = &rest[idx + prefix.len()..];
         let token_chars: String = after_prefix
             .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+            .take_while(|c| {
+                (c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                    && *c != '&'
+                    && *c != '?'
+                    && *c != '='
+                    && *c != '#'
+            })
             .collect();
         let total_len = prefix.len() + token_chars.len();
-        if total_len >= min_len && total_len <= max_len {
+        if valid_start && total_len >= min_len && total_len <= max_len {
             result.push_str(replacement);
         } else {
             result.push_str(prefix);

@@ -1518,8 +1518,11 @@ pub fn parse_quick_capture_with_today(
             let w1 = clean_token_punct(raw_tokens[idx + 1]);
             let w2 = clean_token_punct(raw_tokens[idx + 2]).to_ascii_lowercase();
             if let Ok(days) = w1.parse::<i64>() {
-                if days >= 0 && (w2 == "day" || w2 == "days" || w2 == "d") {
-                    scheduled_date = Some(today + Duration::days(days));
+                if (0..=3650).contains(&days)
+                    && (w2 == "day" || w2 == "days" || w2 == "d")
+                    && let Some(target_date) = today.checked_add_signed(Duration::days(days))
+                {
+                    scheduled_date = Some(target_date);
                     consumed[idx] = true;
                     consumed[idx + 1] = true;
                     consumed[idx + 2] = true;
@@ -1695,8 +1698,11 @@ fn parse_duration_token(s: &str) -> Option<i32> {
             .or_else(|| rest.strip_suffix('m'))
         {
             if let (Ok(h), Ok(m)) = (h_part.parse::<i32>(), m_part.parse::<i32>()) {
-                if h >= 0 && m >= 0 && (h > 0 || m > 0) {
-                    return Some(h * 60 + m);
+                if (0..=24).contains(&h) && (0..60).contains(&m) {
+                    let total = h * 60 + m;
+                    if (1..=1440).contains(&total) {
+                        return Some(total);
+                    }
                 }
             }
         }

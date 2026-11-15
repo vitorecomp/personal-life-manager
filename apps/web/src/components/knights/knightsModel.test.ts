@@ -237,4 +237,53 @@ describe('knightsModel unit tests (F26)', () => {
     expect(resolveSkillSlotMode(afterRevokePrefix, 'todos.*')).toBe('NONE');
     expect(resolveSkillSlotMode(afterRevokePrefix, 'portfolio.*')).toBe('READ');
   });
+
+  it('adv_computeKnightTelemetry_and_turnOrderChain_handle_paused_barracks_and_wildcard_policy', () => {
+    const pausedScholar = computeKnightTelemetry({
+      id: 'k-scholar',
+      name: 'Lady Archive',
+      archetype: 'scholar',
+      enabled: false,
+      monthly_budget_cents: 500,
+      spent_month_cents: 600,
+      ep_used_tokens: 32000,
+      ep_max_tokens: 128000,
+    });
+    expect(pausedScholar.archetype).toBe('lore_warden');
+    expect(pausedScholar.zone).toBe('standby_barracks');
+    expect(pausedScholar.hpPct).toBe(0);
+    expect(pausedScholar.isCircuitBroken).toBe(true);
+    expect(pausedScholar.isPaused).toBe(true);
+
+    const expanded = buildUpdatedToolsPolicy({ '*': 'READ' }, 'todos.*', 'AUTO');
+    expect(resolveSkillSlotMode(expanded, 'todos.*')).toBe('AUTO');
+    expect(resolveSkillSlotMode(expanded, 'routines.*')).toBe('READ');
+
+    expect(insertSoulTemplateVariable('Hello ', '{{today}}')).toBe('Hello {{today}}');
+    expect(
+      validateKnightForgeInput({
+        name: '',
+        crestColor: 'invalid',
+        monthlyBudgetCents: -5,
+        epMaxTokens: 500,
+      }).valid,
+    ).toBe(false);
+
+    const chain = buildTurnOrderChain({
+      knights: [pausedScholar],
+      queueItems: [
+        {
+          trigger_id: 'trig-1',
+          agent_id: 'k-scholar',
+          agent_slug: 'lady-archive',
+          agent_name: 'Lady Archive',
+          trigger_type: 'cron',
+          label: '07:00 Pulse',
+          scheduled_at: '2026-11-16T07:00:00Z',
+        },
+      ],
+      recentRuns: [],
+    });
+    expect(chain.upcomingNodes).toEqual([]);
+  });
 });

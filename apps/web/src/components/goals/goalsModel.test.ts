@@ -180,4 +180,39 @@ describe('goalsModel — F30 OKR Normalizers, Zero-Range Guards & 90° Orthogona
       }
     }
   });
+
+  it('adv_computeKrProgressPct_and_normalizeBlueprintLayout_handle_linked_krs_weighted_milestones_and_corridors', () => {
+    expect(
+      computeKrProgressPct({
+        metric_type: 'numeric',
+        start_value: 200,
+        target_value: 100,
+        current_value: 150,
+      }),
+    ).toBe(50);
+
+    expect(
+      computeKrProgressPct({
+        metric_type: 'milestones',
+        milestones_json: [
+          { id: 'm1', title: 'M1', weight: 3, done: true },
+          { id: 'm2', title: 'M2', weight: 1, done: false },
+        ],
+      }),
+    ).toBe(75);
+
+    const goals = [
+      normalizeGoalWithDetails({
+        id: 'g1',
+        title: 'Goal 1',
+        key_results: [{ id: 'kr1', goal_id: 'g1', title: 'KR 1', quarter: 'Q1' }],
+      }),
+    ];
+    const layout = normalizeBlueprintLayout(null, 2026, goals);
+    expect(layout.corridors.length).toBeGreaterThanOrEqual(2);
+    for (const corridor of layout.corridors) {
+      const pathD = formatOrthogonalPathD(corridor.waypoints);
+      expect(pathD).not.toMatch(/[CSQTA]/i);
+    }
+  });
 });

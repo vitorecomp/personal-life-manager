@@ -287,4 +287,52 @@ describe('F21 — Hot-Swappable Pixel-Art PNG + JSON Sprite Engine', () => {
       '[BUDGET_0]',
     );
   });
+
+  it('adv_companion_stage_popover_viewport_clamping_reject_callback_and_offline_signal_rotation', () => {
+    const onReject = vi.fn();
+    const { rerender } = render(
+      <CompanionStage
+        mode="popover"
+        open
+        online={true}
+        pageContext={{ activeRoute: '/finance', selectedEntityLabel: 'FINANCE // OPERATOR' }}
+        pendingApprovals={[
+          {
+            id: 'apr-99',
+            toolName: 'finance_rebalance_apply',
+            summary: 'Apply rebalance order',
+            payloadJson: {},
+          },
+        ]}
+        onReject={onReject}
+      />,
+    );
+
+    const popover = screen.getByTestId('companion-stage-popover');
+    expect(popover.style.maxHeight).toBe('calc(100vh - 32px)');
+    expect(popover.style.overflowY).toBe('auto');
+
+    fireEvent.click(screen.getByText('[Reject]'));
+    expect(onReject).toHaveBeenCalledWith('apr-99');
+
+    rerender(
+      <CompanionStage
+        mode="mobile"
+        online={false}
+        queuedMutationsCount={3}
+        offlinePhrases={[
+          { id: 'p1', phraseText: 'First offline signal.', animationHint: 'idle_ledge_sit' },
+          { id: 'p2', phraseText: 'Second offline signal.', animationHint: 'read_grimoire' },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('companion-offline-banner').textContent).toContain('QUEUED:3');
+    const speech = screen.getByTestId('companion-offline-speech-bubble');
+    expect(speech.textContent).toContain('First offline signal.');
+    fireEvent.click(speech);
+    expect(screen.getByTestId('companion-offline-speech-bubble').textContent).toContain(
+      'Second offline signal.',
+    );
+  });
 });

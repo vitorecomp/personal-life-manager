@@ -1181,20 +1181,19 @@ impl IntelligenceService {
     }
 }
 
-fn extract_inline_thinking(content: &str) -> Option<(String, String)> {
+pub fn extract_inline_thinking(content: &str) -> Option<(String, String)> {
     let start = content.find("<thinking>")?;
-    let end = content.find("</thinking>")?;
-    if end <= start {
-        return None;
-    }
-    let think = content[start + "<thinking>".len()..end].trim().to_string();
+    let after_start = start + "<thinking>".len();
+    let rel_end = content[after_start..].find("</thinking>")?;
+    let end = after_start + rel_end;
+    let think = content[after_start..end].trim().to_string();
     let mut rest = String::new();
     rest.push_str(&content[..start]);
     rest.push_str(&content[end + "</thinking>".len()..]);
     Some((think, rest.trim().to_string()))
 }
 
-fn parse_inline_mcp_directive(message: &str) -> Option<ChatToolCallDirective> {
+pub fn parse_inline_mcp_directive(message: &str) -> Option<ChatToolCallDirective> {
     let trimmed = message.trim();
     let rest = trimmed.strip_prefix("/mcp ")?.trim();
     let (tool_name, json_part) = match rest.split_once(char::is_whitespace) {

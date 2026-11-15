@@ -5,6 +5,7 @@ import {
   detectAllocationDrift,
   formatFireDurationLabel,
   normalizeAllocationResponse,
+  normalizeAssetCandlesResponse,
   normalizeMonthlyPlan,
   normalizePortfolioAsset,
   sortMonthlyPlansChronologically,
@@ -223,5 +224,56 @@ describe('financeModel (F32 Finance Operator)', () => {
     expect(slices).toHaveLength(2);
     expect(slices[0]?.label).toBe('PETR4');
     expect(slices[1]?.label).toBe('VWRA');
+  });
+
+  it('adv_normalizeAssetCandlesResponse_and_deriveWaffleSlices_and_fireDuration_edge_cases', () => {
+    const candles = normalizeAssetCandlesResponse(
+      {
+        symbol: 'BTC',
+        range_key: '90D',
+        candles: [
+          {
+            timestamp: '2026-11-01',
+            open_cents: 9000000,
+            close_cents: 9200000,
+            high_cents: 9100000,
+            low_cents: 9300000,
+          },
+        ],
+      },
+      'BTC',
+      '1M',
+    );
+    expect(candles.candles.length).toBe(1);
+    expect(candles.candles[0]?.high_cents).toBe(9200000);
+    expect(candles.candles[0]?.low_cents).toBe(9000000);
+
+    const holding = computeHoldingMetrics(
+      {
+        quantity: '2',
+        avg_cost_cents: 10000,
+        current_price_cents: 15000,
+        currency: 'USD',
+        alert_low_cents: 12000,
+        alert_high_cents: 14000,
+      },
+      5.0,
+    );
+    expect(holding.valueUsdCents).toBe(30000);
+    expect(holding.valueBrlCents).toBe(150000);
+    expect(holding.isAlertHighBreached).toBe(true);
+    expect(holding.isAlertTriggered).toBe(true);
+
+    expect(deriveWaffleSlices(null, [])).toEqual([]);
+    expect(formatFireDurationLabel({ months_to_fi: 0, unreachable: false })).toBe('0Y 0M');
+    expect(formatFireDurationLabel({ months_to_fi: 24, unreachable: false })).toBe('2Y 0M');
+    expect(formatFireDurationLabel({ months_to_fi: null, unreachable: true })).toBe('UNREACHABLE');
+
+    const zeroIncomePlan = normalizeMonthlyPlan({
+      month: '2026-11',
+      salary_income_cents: 0,
+      planned_spend_cents: 50000,
+    });
+    expect(zeroIncomePlan.savings_rate_pct).toBe(0);
   });
 });

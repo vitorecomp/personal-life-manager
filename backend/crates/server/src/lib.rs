@@ -509,12 +509,14 @@ pub fn normalize_json_payload(val: &mut Value) {
                 }
             }
 
-            // Normalize `knight_archetype` aliases and casing
+            // Normalize `knight_archetype` (or its `archetype` alias) synonyms and casing
             if let Some(arch_str) = map
                 .get("knight_archetype")
+                .or_else(|| map.get("archetype"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim().to_ascii_lowercase())
             {
+                map.remove("archetype");
                 let normalized_arch = match arch_str.as_str() {
                     "paladin" => "paladin",
                     "vanguard" | "ranger" => "vanguard",
@@ -3846,4 +3848,53 @@ async fn handle_create_snapshot(
     let req: CreatePortfolioSnapshotRequest = parse_optional_json_bytes(&body)?;
     let created = state.life_ops.create_portfolio_snapshot(req).await?;
     Ok((StatusCode::CREATED, Json(created)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adv_f04_f06_normalize_json_payload_aliases_dates_and_auth_extraction() {
+        // 1. `archetype` alias alone (without `knight_archetype`) normalizes synonyms and casing
+        let mut arch_only = json!({
+            "name": "Strategist Knight",
+            "archetype": "Strategist",
+            "zone": "citadel"
+        });
+        normalize_json_payload(&mut arch_only);
+        assert_eq!(arch_only["knight_archetype"], "lore_warden");
+        assert!(arch_only.get("archetype").is_none());
+        assert_eq!(arch_only["grid_pos"]["zone"], "citadel");
+
+        // 2. Trigger top-level `cron_expr` and `event_name`, blueprint_pos, date normalization, and bulk delete
+        let mut complex = json!({
+            "origin": "Companion_Popover",
+            "cron_expr": "0 9 * * 1-5",
+            "event_name": "goal.pace_at_risk",
+            "blueprint_pos": { "x": 380.0, "y": 120.0 },
+            "due_date": "2026-11-20",
+            "scheduled_date": "2026-11-20T14:30:00Z",
+            "target_date": "2026-12-31T00:00:00Z",
+            "action": "DELETE",
+            "task_ids": ["01900000-0000-7000-8000-000000000001"],
+            "ids": ["01900000-0000-7000-8000-000000000001"]
+        });
+        normalize_json_payload(&mut complex);
+        assert_eq!(complex["origin"], "frieren_popover");
+        assert_eq!(complex["config_json"]["cron"], "0 9 * * 1-5");
+        assert_eq!(complex["config_json"]["event"], "goal.pace_at_risk");
+        assert_eq!(complex["position_x"], 380.0);
+        assert_eq!(complex["position_y"], 120.0);
+        assert_eq!(complex["due_date"], "2026-11-20T12:00:00Z");
+        assert_eq!(complex["scheduled_date"], "2026-11-20");
+        assert_eq!(complex["target_date"], "2026-12-31");
+        assert_eq!(complex["delete"], true);
+        assert!(complex.get("ids").is_none());
+
+        // 3. Empty bytes deserialize cleanly via `parse_json_bytes` / `parse_optional_json_bytes`
+        let empty_val: Value = parse_json_bytes(b"").expect("empty bytes -> {}");
+        assert!(empty_val.is_object());
+        assert!(parse_json_bytes::<Value>(b"{malformed").is_err());
+    }
 }

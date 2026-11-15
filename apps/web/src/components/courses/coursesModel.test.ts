@@ -116,4 +116,53 @@ describe('coursesModel — F31 Course Progress Guards, Syllabus Normalizer & Spa
     const outOfRange = normalizeCourse({ id: 'c2', title: 'Test', rating: 9 });
     expect(outOfRange.rating).toBeNull();
   });
+
+  it('adv_computeCourseProgressPct_and_spacedReview_handle_minutes_fallback_and_review_stage_intervals', () => {
+    expect(
+      computeCourseProgressPct({
+        total_items: 0,
+        completed_items: 0,
+        estimated_total_minutes: 120,
+        completed_minutes: 90,
+      }),
+    ).toBe(75);
+
+    expect(nextLessonStatus('todo')).toBe('in_progress');
+    expect(nextLessonStatus('in_progress')).toBe('distilled');
+    expect(nextLessonStatus('distilled')).toBe('completed');
+    expect(nextLessonStatus('completed')).toBe('completed');
+
+    const due0 = normalizeSpacedReviewDueItem({
+      lesson: { id: 'l1', title: 'Borrow Checker', review_stage: 0 },
+      course_title: 'Rust Systems',
+    });
+    expect(due0.interval_label).toBe('7d');
+    expect(due0.interval_days).toBe(7);
+
+    const due1 = normalizeSpacedReviewDueItem({
+      lesson: { id: 'l2', title: 'Lifetimes', review_stage: 1 },
+      course_title: 'Rust Systems',
+    });
+    expect(due1.interval_label).toBe('30d');
+    expect(due1.interval_days).toBe(30);
+
+    const syllabus = normalizeCourseSyllabus({
+      id: 'c1',
+      title: 'Rust Track',
+      active_courses_count: 5,
+      wip_limit: 3,
+      modules: [
+        {
+          id: 'm1',
+          title: 'Mod 1',
+          lessons: [
+            { id: 'l1', title: 'L1', status: 'completed' },
+            { id: 'l2', title: 'L2', status: 'todo' },
+          ],
+        },
+      ],
+    });
+    expect(syllabus.wip_exceeded).toBe(true);
+    expect(syllabus.progress_pct_num).toBe(50);
+  });
 });

@@ -10,6 +10,8 @@ import {
   toRfc3339DueDate,
   UUID_RE,
 } from './api/client';
+import { PrivacyMaskProvider } from '@hermes/ui';
+import { RoomMonitorView } from './components/monitor/RoomMonitorView';
 import { WidgetRenderer } from './components/monitor/WidgetRenderer';
 import { useAppStore } from './store/appStore';
 
@@ -1546,5 +1548,125 @@ describe('HERMES // OS Web SPA — Sub-Milestone M4A (F23, F24, F27)', () => {
       json_pointer: '/status',
       headers: { 'X-Probe': '1' },
     });
+  });
+
+  it('adv_kiosk_keydown_rebinds_when_kiosk_nav_decks_length_changes_with_single_rotation_deck', async () => {
+    let returnFourDecks = false;
+    const singleDeckList = [
+      {
+        id: '01963000-0000-7000-8000-00000000d001',
+        slug: 'deck-alpha',
+        title: 'DECK_ALPHA // PRIMARY',
+        cycle_seconds: 60,
+        in_rotation: true,
+        sort_order: 1,
+        layout_cols: 12,
+        layout_rows: 8,
+        widgets: [],
+      },
+    ];
+    const fourDeckListSingleRotation = [
+      ...singleDeckList,
+      {
+        id: '01963000-0000-7000-8000-00000000d002',
+        slug: 'deck-beta',
+        title: 'DECK_BETA // SECONDARY',
+        cycle_seconds: 60,
+        in_rotation: false,
+        sort_order: 2,
+        layout_cols: 12,
+        layout_rows: 8,
+        widgets: [],
+      },
+      {
+        id: '01963000-0000-7000-8000-00000000d003',
+        slug: 'deck-gamma',
+        title: 'DECK_GAMMA // TERTIARY',
+        cycle_seconds: 60,
+        in_rotation: false,
+        sort_order: 3,
+        layout_cols: 12,
+        layout_rows: 8,
+        widgets: [],
+      },
+      {
+        id: '01963000-0000-7000-8000-00000000d004',
+        slug: 'deck-delta',
+        title: 'DECK_DELTA // QUATERNARY',
+        cycle_seconds: 60,
+        in_rotation: false,
+        sort_order: 4,
+        layout_cols: 12,
+        layout_rows: 8,
+        widgets: [],
+      },
+    ];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/dashboards')) {
+        return new Response(
+          JSON.stringify({
+            dashboards: returnFourDecks ? fourDeckListSingleRotation : singleDeckList,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PrivacyMaskProvider storageKey={null}>
+          <RoomMonitorView kioskMode onNavigate={vi.fn()} />
+        </PrivacyMaskProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('monitor-active-deck-title').textContent).toBe(
+        'DECK_ALPHA // PRIMARY',
+      );
+    });
+
+    returnFourDecks = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+    });
+
+    await waitFor(() => {
+      const cached = queryClient.getQueryData<unknown[]>(['dashboards']);
+      expect(cached?.length).toBe(4);
+    });
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('monitor-active-deck-title').textContent).toBe(
+        'DECK_BETA // SECONDARY',
+      );
+    });
+
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('monitor-active-deck-title').textContent).toBe(
+        'DECK_DELTA // QUATERNARY',
+      );
+    });
+
+    fireEvent.click(screen.getByTestId('monitor-prev-btn'));
+    expect(screen.getByTestId('monitor-active-deck-title').textContent).toBe(
+      'DECK_GAMMA // TERTIARY',
+    );
+    fireEvent.click(screen.getByTestId('monitor-next-btn'));
+    expect(screen.getByTestId('monitor-active-deck-title').textContent).toBe(
+      'DECK_DELTA // QUATERNARY',
+    );
   });
 });

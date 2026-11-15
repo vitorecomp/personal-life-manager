@@ -85,4 +85,25 @@ describe('@hermes/api-client bootstrap contract & OpenAPI 3.1 generated SDK', ()
     expect(spec.paths['/api/tasks']).toBeDefined();
     expect(spec.paths['/api/finance/assets']).toBeDefined();
   });
+
+  it('adv_configureApiClient_and_createApiHeaders_handle_missing_token_and_uuidv7_monotonicity', () => {
+    expect(createApiHeaders()).toEqual({ Accept: 'application/json' });
+    expect(createApiHeaders({ bearerToken: '' })).toEqual({ Accept: 'application/json' });
+    expect(createApiHeaders({ bearerToken: 'plm_pat_abc123' })).toEqual({
+      Accept: 'application/json',
+      Authorization: 'Bearer plm_pat_abc123',
+    });
+
+    const configured = configureApiClient({
+      baseUrl: 'http://127.0.0.1:8080',
+      bearerToken: 'plm_pat_xyz987',
+    });
+    expect(configured.getConfig().baseUrl).toBe('http://127.0.0.1:8080');
+
+    const id1 = createMutationId();
+    const id2 = createMutationId();
+    expect(id1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(id2).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(id1).not.toBe(id2);
+  });
 });

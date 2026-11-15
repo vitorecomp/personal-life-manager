@@ -300,4 +300,267 @@ mod tests {
         let _life_score_utoipa = dashboards::LifeScoreResponse::schema();
         let _life_score_schemars = schema_for!(dashboards::LifeScoreResponse);
     }
+
+    #[test]
+    fn adv_goal_key_result_computed_progress_binary_milestones_and_numeric_edge_cases() {
+        let now = Utc::now();
+        let mut kr = GoalKeyResult {
+            id: new_uuid_v7(),
+            goal_id: new_uuid_v7(),
+            quarter: OkrQuarter::Q1,
+            code: "KR-ADV-1".to_string(),
+            title: "Adversarial KR".to_string(),
+            metric_type: KrMetricType::Binary,
+            start_value: Decimal::ZERO,
+            current_value: Decimal::ZERO,
+            target_value: Decimal::ZERO,
+            unit: "bool".to_string(),
+            milestones_json: serde_json::json!([]),
+            linked_entity_id: None,
+            weight: Decimal::ONE,
+            blueprint_pos: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        // 1. Binary with target_value == 0 requires current_value >= 1
+        assert_eq!(kr.computed_progress_pct(), Decimal::ZERO);
+        kr.current_value = Decimal::ONE;
+        assert_eq!(kr.computed_progress_pct(), Decimal::from(100));
+
+        // Binary with target_value > 0: 0 is 0%, >= 1 is 100%
+        kr.target_value = Decimal::ONE;
+        kr.current_value = Decimal::ZERO;
+        assert_eq!(kr.computed_progress_pct(), Decimal::ZERO);
+        kr.current_value = Decimal::from(5);
+        assert_eq!(kr.computed_progress_pct(), Decimal::from(100));
+
+        // 2. Milestones with weighted items, `completed` alias, and negative weight clamped to 0
+        kr.metric_type = KrMetricType::Milestones;
+        kr.milestones_json = serde_json::json!([
+            {"title": "M1", "weight": 3.0, "done": true},
+            {"title": "M2", "weight": 1.0, "completed": false},
+            {"title": "M3", "weight": -10.0, "done": true}
+        ]);
+        assert_eq!(kr.computed_progress_pct(), Decimal::from(75));
+
+        // Milestones with all-zero weights returns 0% (no division-by-zero)
+        kr.milestones_json = serde_json::json!([
+            {"title": "Zero", "weight": 0.0, "done": true}
+        ]);
+        assert_eq!(kr.computed_progress_pct(), Decimal::ZERO);
+
+        // Milestones with empty array falls back to linear start/target math
+        kr.milestones_json = serde_json::json!([]);
+        kr.start_value = Decimal::from(10);
+        kr.target_value = Decimal::from(50);
+        kr.current_value = Decimal::from(30);
+        assert_eq!(kr.computed_progress_pct(), Decimal::from(50));
+
+        // 3. Numeric with target_value == start_value (zero span guard) and clamping 0..=100
+        kr.metric_type = KrMetricType::Numeric;
+        kr.start_value = Decimal::from(100);
+        kr.target_value = Decimal::from(100);
+        kr.current_value = Decimal::from(99);
+        assert_eq!(kr.computed_progress_pct(), Decimal::ZERO);
+        kr.current_value = Decimal::from(100);
+        assert_eq!(kr.computed_progress_pct(), Decimal::from(100));
+
+        kr.start_value = Decimal::ZERO;
+        kr.target_value = Decimal::from(100);
+        kr.current_value = Decimal::from(-25);
+        assert_eq!(kr.computed_progress_pct(), Decimal::ZERO);
+        kr.current_value = Decimal::from(250);
+        assert_eq!(kr.computed_progress_pct(), Decimal::from(100));
+    }
+
+    #[test]
+    fn adv_hermes_session_computed_metadata_and_sse_frame_contracts() {
+        let now = Utc::now();
+        let long_text = "X".repeat(200);
+        let session = HermesSession {
+            session_key: "sess-adv".to_string(),
+            title: "Adv Session".to_string(),
+            origin: SessionOrigin::HermesView,
+            profile_slug: Some("tactical-profile".to_string()),
+            model: None,
+            pinned: false,
+            archived: false,
+            folder_name: None,
+            parent_session_key: Some("sess-parent".to_string()),
+            forked_from: None,
+            branched_at_turn: Some(2),
+            high_level_mode: true,
+            last_route_context: None,
+            messages_json: serde_json::json!([
+                {"role": "user", "content": long_text, "created_at": "2026-11-15T10:00:00Z"},
+                {"role": "assistant", "content": "   "}
+            ]),
+            message_count: 0,
+            token_count: 0,
+            last_message_preview: None,
+            last_message_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+        .with_computed_metadata();
+
+        assert_eq!(session.model.as_deref(), Some("tactical-profile"));
+        assert_eq!(session.forked_from.as_deref(), Some("sess-parent"));
+        assert_eq!(session.message_count, 2);
+        assert_eq!(session.token_count, 51);
+        assert_eq!(session.last_message_preview.as_deref().unwrap().len(), 140);
+
+        // Non-array messages_json fallback and default model fallback
+        let fallback_sess = HermesSession {
+            profile_slug: None,
+            model: None,
+            messages_json: serde_json::json!({"invalid": true}),
+            ..session
+        }
+        .with_computed_metadata();
+        assert_eq!(
+            fallback_sess.model.as_deref(),
+            Some("hermes-3-llama-3.1-70b")
+        );
+        assert_eq!(fallback_sess.message_count, 0);
+        assert_eq!(fallback_sess.token_count, 0);
+        assert!(fallback_sess.last_message_preview.is_none());
+
+        // SSE frame formatting across variants
+        let thinking_ev = HermesStreamEvent::Thinking {
+            session_key: "s1".to_string(),
+            content: "Step 1".to_string(),
+            step: 1,
+            thinking_orb_active: true,
+            orb_state: ThinkingOrbState {
+                active: true,
+                vertices_lit: 6,
+                rings_locked: 2,
+                phase: "reasoning".to_string(),
+            },
+            gateway_mode: "offline_mock".to_string(),
+        };
+        let frame = thinking_ev.to_sse_frame();
+        assert!(frame.starts_with("event: thinking\ndata: "));
+        assert!(frame.ends_with("\n\n"));
+        assert!(frame.contains("\"type\":\"thinking\""));
+    }
+
+    #[test]
+    fn adv_finance_portfolio_asset_and_monthly_plan_computed_metrics_edge_cases() {
+        let now = Utc::now();
+        let mut asset = PortfolioAsset {
+            id: new_uuid_v7(),
+            symbol: "BTC".to_string(),
+            name: "Bitcoin".to_string(),
+            asset_class: AssetClass::Crypto,
+            currency: CurrencyCode::Usd,
+            in_portfolio: true,
+            quantity: Decimal::new(25, 2), // 0.25 BTC
+            avg_cost_cents: 60_000_00,
+            current_price_cents: 80_000_00,
+            previous_close_cents: Some(78_000_00),
+            dividend_yield_pct: Some(Decimal::ZERO),
+            target_weight_pct: Decimal::from(15),
+            alert_low_cents: None,
+            alert_high_cents: None,
+            thesis_md: String::new(),
+            quote_source: "manual".to_string(),
+            last_quote_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(!asset.is_watchlist());
+        assert_eq!(asset.market_value_native_cents(), 20_000_00);
+        assert_eq!(asset.cost_basis_native_cents(), 15_000_00);
+        assert_eq!(asset.unrealized_pnl_native_cents(), 5_000_00);
+
+        asset.in_portfolio = false;
+        asset.quantity = Decimal::ZERO;
+        assert!(asset.is_watchlist());
+
+        // MonthlyInvestmentPlan with salary == 0 and overspend (negative cashflow clamped surplus to 0)
+        let plan = MonthlyInvestmentPlan {
+            month: "2026-11".to_string(),
+            currency: CurrencyCode::Brl,
+            fx_usd_brl: Decimal::from(5),
+            salary_income_cents: 0,
+            planned_spend_cents: 500_00,
+            actual_spend_cents: Some(750_00),
+            planned_investment_cents: 200_00,
+            actual_invested_cents: 0,
+            allocations_json: serde_json::json!({}),
+            notes_md: String::new(),
+            created_at: now,
+            updated_at: now,
+            net_cashflow_cents: 0,
+            investable_surplus_cents: 0,
+            savings_rate_pct: 0.0,
+        }
+        .with_computed_metrics();
+        assert_eq!(plan.net_cashflow_cents, -750_00);
+        assert_eq!(plan.investable_surplus_cents, 0);
+        assert_eq!(plan.savings_rate_pct, 0.0);
+    }
+
+    #[test]
+    fn adv_domain_enum_serde_aliases_and_custom_provider_fallback() {
+        assert_eq!(
+            serde_json::from_str::<KnightArchetype>("\"scholar\"").unwrap(),
+            KnightArchetype::LoreWarden
+        );
+        assert_eq!(
+            serde_json::from_str::<KnightArchetype>("\"ranger\"").unwrap(),
+            KnightArchetype::Vanguard
+        );
+        assert_eq!(
+            serde_json::from_str::<KnightArchetype>("\"sentinel\"").unwrap(),
+            KnightArchetype::Inquisitor
+        );
+        assert_eq!(
+            serde_json::from_str::<CourseProvider>("\"yt\"").unwrap(),
+            CourseProvider::Youtube
+        );
+        assert_eq!(
+            serde_json::from_str::<CourseProvider>("\"mit_ocw_custom\"").unwrap(),
+            CourseProvider::Custom
+        );
+        assert_eq!(
+            serde_json::from_str::<SpacedReviewAction>("\"advance\"").unwrap(),
+            SpacedReviewAction::Complete
+        );
+        assert_eq!(
+            serde_json::from_str::<SpacedReviewAction>("\"postpone\"").unwrap(),
+            SpacedReviewAction::Snooze
+        );
+        assert_eq!(
+            serde_json::from_str::<SpacedReviewAction>("\"fail\"").unwrap(),
+            SpacedReviewAction::Again
+        );
+        assert_eq!(
+            serde_json::from_str::<GoalPillar>("\"career_craft\"").unwrap(),
+            GoalPillar::Career
+        );
+        assert_eq!(
+            serde_json::from_str::<TriggerContext>("\"morning_briefing\"").unwrap(),
+            TriggerContext::Any
+        );
+        assert_eq!(
+            serde_json::from_str::<McpAutonomyTier>("\"IMMEDIATE_UNDO\"").unwrap(),
+            McpAutonomyTier::ImmediateUndo
+        );
+        assert_eq!(
+            serde_json::from_str::<DayProfile>("\"mvd\"").unwrap(),
+            DayProfile::MinimumViable
+        );
+        assert_eq!(
+            serde_json::from_str::<HabitFrequencyType>("\"custom\"").unwrap(),
+            HabitFrequencyType::TimesPerWeek
+        );
+        assert_eq!(
+            serde_json::from_str::<TimerMode>("\"pomodoro\"").unwrap(),
+            TimerMode::Pomodoro25_5
+        );
+    }
 }

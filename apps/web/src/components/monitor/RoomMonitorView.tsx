@@ -660,6 +660,7 @@ export function RoomMonitorView({
   }, [
     kioskMode,
     rotationDecks.length,
+    kioskNavDecks.length,
     onNavigate,
     showAddWidget,
     showCreateDeck,
@@ -1371,8 +1372,8 @@ export function RoomMonitorView({
                 onClick={() => {
                   setCycleState((prev) => ({
                     rotationIndex:
-                      rotationDecks.length > 0
-                        ? (prev.rotationIndex - 1 + rotationDecks.length) % rotationDecks.length
+                      kioskNavDecks.length > 0
+                        ? (prev.rotationIndex - 1 + kioskNavDecks.length) % kioskNavDecks.length
                         : 0,
                     elapsedMs: 0,
                   }));
@@ -1395,8 +1396,8 @@ export function RoomMonitorView({
                 onClick={() => {
                   setCycleState((prev) => ({
                     rotationIndex:
-                      rotationDecks.length > 0
-                        ? (prev.rotationIndex + 1) % rotationDecks.length
+                      kioskNavDecks.length > 0
+                        ? (prev.rotationIndex + 1) % kioskNavDecks.length
                         : 0,
                     elapsedMs: 0,
                   }));

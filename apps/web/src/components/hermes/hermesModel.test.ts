@@ -173,4 +173,40 @@ describe('hermesModel — pure workspace logic', () => {
     expect(originLabel('frieren_popover')).toBe('FRIEREN');
     expect(originLabel('knight_run')).toBe('KNIGHT_RUN');
   });
+
+  it('adv_suggestForCaret_respects_offline_mock_gate_mid_sentence_slash_and_vault_subpath', () => {
+    const defaultSlash = suggestForCaret('/mc', 3, { includeOfflineMockOnly: false });
+    expect(defaultSlash.some((s) => s.value === '/mcp')).toBe(false);
+
+    const mockEnabledSlash = suggestForCaret('/mc', 3, { includeOfflineMockOnly: true });
+    expect(mockEnabledSlash.some((s) => s.value === '/mcp')).toBe(true);
+
+    expect(suggestForCaret('run /sum', 8)).toEqual([]);
+
+    const mention = suggestForCaret('inspect @vau', 12);
+    expect(mention.some((m) => m.value === '@vault')).toBe(true);
+  });
+
+  it('adv_summarizePayload_and_extractCitedNotePaths_reject_path_traversal_and_validate_json_edits', () => {
+    expect(summarizePayload(null)).toBe('no arguments');
+    expect(summarizePayload(['alpha', 'beta', 'gamma', 'delta'])).toBe('4 items');
+    expect(summarizePayload('x'.repeat(200), 20)).toContain('…');
+    expect(
+      extractCitedNotePaths([
+        'See [[02-Areas/Weekly-Review.md]] and @vault:01-Projects/Hermes.md, ignore ../secret.md and /etc/passwd.md',
+      ]),
+    ).toEqual(['02-Areas/Weekly-Review.md', '01-Projects/Hermes.md']);
+
+    expect(parseEditedPayload('["not-an-object"]').ok).toBe(false);
+    expect(parseEditedPayload('{"title":"Valid"}')).toEqual({
+      ok: true,
+      value: { title: 'Valid' },
+    });
+    expect(describeUndoTarget('tasks', '01963000-0000-7000-8000-000000000711')).toBe(
+      'tasks #01963000…0711',
+    );
+    expect(formatCountdown('2026-11-15T10:01:30Z', Date.parse('2026-11-15T10:00:00Z'))).toBe(
+      '01:30',
+    );
+  });
 });

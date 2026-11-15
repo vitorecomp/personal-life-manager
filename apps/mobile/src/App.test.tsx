@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALLOWED_MOBILE_SURFACES, App } from './App';
 import { parseTodoQuickCapture } from './db/nlpParser';
-import { decryptPat, encryptPat, parsePairingQrPayload } from './db/patCrypto';
+import { decryptPat, encryptPat, maskPatPrefix, parsePairingQrPayload } from './db/patCrypto';
 import {
   ALL_MOBILE_SQLITE_TABLES,
   compareIsoTimestamps,
@@ -1598,5 +1598,43 @@ describe('HERMES Companion Mobile App — F33, F34, F35 Verification Suite', () 
       }),
     ).resolves.toBe(false);
     expect(neverCalledFetch).not.toHaveBeenCalled();
+  });
+
+  it('adv_mobile_decryptPat_corrupted_envelopes_and_qr_nested_payload_and_nlp_bounds', () => {
+    expect(decryptPat('')).toBe('');
+    expect(decryptPat('enc:v1:not-valid-hex!!!')).toBe('');
+    expect(decryptPat('enc:v1:abc')).toBe('');
+    const validCipher = encryptPat('plm_pat_mobile_secret', 'device-a');
+    expect(decryptPat(validCipher, 'device-a')).toBe('plm_pat_mobile_secret');
+    expect(maskPatPrefix('plm_pat_abcd1234')).toBe('PAT // ABCD••••');
+
+    const nestedQr = parsePairingQrPayload(
+      JSON.stringify({
+        qr_payload_json: JSON.stringify({
+          primary_url: 'http://100.64.0.10:8080',
+          fallback_url: 'http://192.168.1.50:8080',
+          pat: 'plm_pat_qr_nested',
+          token_name: 'Pixel-9-Pro',
+        }),
+      }),
+    );
+    expect(nestedQr).toEqual({
+      primaryUrl: 'http://100.64.0.10:8080',
+      fallbackUrl: 'http://192.168.1.50:8080',
+      token: 'plm_pat_qr_nested',
+      tokenName: 'Pixel-9-Pro',
+    });
+    expect(parsePairingQrPayload('not-json')).toBeNull();
+
+    const parsedNlp = parseTodoQuickCapture(
+      'Review mobile sync 1h30m in 5 days #mobile !p1 @deep_focus',
+      '2026-11-15',
+    );
+    expect(parsedNlp.valid).toBe(true);
+    expect(parsedNlp.estimatedMinutes).toBe(90);
+    expect(parsedNlp.scheduledDate).toBe('2026-11-20');
+    expect(parsedNlp.priority).toBe('urgent');
+    expect(parsedNlp.energyLevel).toBe('deep');
+    expect(parsedNlp.tags).toEqual(['mobile']);
   });
 });

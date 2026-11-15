@@ -646,18 +646,26 @@ export function formatWeeklyReviewMetrics(
   summary?: Partial<WeeklyReviewSummaryResponse> | null,
 ): FormattedWeeklyReviewMetrics {
   const isoWeek =
-    summary?.iso_week && String(summary.iso_week).trim().length > 0
-      ? String(summary.iso_week).trim()
-      : summary?.week_key && String(summary.week_key).trim().length > 0
-        ? String(summary.week_key).trim()
+    typeof summary?.iso_week === 'string' &&
+    summary.iso_week.trim().length > 0 &&
+    !/NaN|Infinity|undefined/i.test(summary.iso_week)
+      ? summary.iso_week.trim()
+      : typeof summary?.week_key === 'string' &&
+          summary.week_key.trim().length > 0 &&
+          !/NaN|Infinity|undefined/i.test(summary.week_key)
+        ? summary.week_key.trim()
         : '2026-W46';
   const weekStart =
-    summary?.week_start && String(summary.week_start).trim().length > 0
-      ? String(summary.week_start).trim()
+    typeof summary?.week_start === 'string' &&
+    summary.week_start.trim().length > 0 &&
+    !/NaN|Infinity|undefined/i.test(summary.week_start)
+      ? summary.week_start.trim()
       : '2026-11-09';
   const weekEnd =
-    summary?.week_end && String(summary.week_end).trim().length > 0
-      ? String(summary.week_end).trim()
+    typeof summary?.week_end === 'string' &&
+    summary.week_end.trim().length > 0 &&
+    !/NaN|Infinity|undefined/i.test(summary.week_end)
+      ? summary.week_end.trim()
       : '2026-11-15';
 
   const completedTasksCount = Math.max(0, Math.round(safeNumber(summary?.completed_tasks_count, 0)));
@@ -691,11 +699,16 @@ export function formatWeeklyReviewMetrics(
   );
   const investableSurplusCents = Math.round(safeNumber(summary?.investable_surplus_cents, 0));
 
+  const rawVaultPath =
+    summary?.obsidian_vault_path ??
+    summary?.weekly_review_vault_path ??
+    summary?.vault_export_path;
   const vaultExportPath =
-    summary?.obsidian_vault_path ||
-    summary?.weekly_review_vault_path ||
-    summary?.vault_export_path ||
-    `Reviews/${isoWeek}.md`;
+    typeof rawVaultPath === 'string' &&
+    rawVaultPath.trim().length > 0 &&
+    !/NaN|Infinity|undefined/i.test(rawVaultPath)
+      ? rawVaultPath.trim()
+      : `Reviews/${isoWeek}.md`;
 
   return {
     isoWeek,

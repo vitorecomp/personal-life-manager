@@ -92,6 +92,7 @@ export function DailyPulseCheckinPanel({
     >
       <form
         onSubmit={handleSubmit}
+        noValidate
         data-testid="daily-pulse-checkin-panel"
         style={{
           display: 'flex',

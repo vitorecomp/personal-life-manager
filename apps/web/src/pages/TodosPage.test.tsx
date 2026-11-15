@@ -491,4 +491,87 @@ describe('TodosPage (/todos) — F28 Perspectives, 3 Layouts, Dependencies & Foc
       expect(document.body.textContent).not.toContain('undefined');
     });
   });
+
+  it('guards POST /api/tasks 422 CYCLE_DETECTED on quick-capture submission with zero unhandled rejections and preserves draft input', async () => {
+    const baseFetch = stubTodosApiMocks();
+    const customFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/api/tasks') && method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            error: 'CYCLE_DETECTED',
+            message: 'Task cannot depend on itself during creation',
+          }),
+          { status: 422, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal('fetch', customFetch);
+
+    renderTodosPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('todos-quick-capture-input')).toBeTruthy();
+    });
+
+    const quickInput = screen.getByTestId('todos-quick-capture-input') as HTMLInputElement;
+    fireEvent.change(quickInput, {
+      target: { value: 'Cyclic Quick Capture Task #systems !urgent' },
+    });
+    fireEvent.keyDown(quickInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      const banner = screen.getByTestId('todos-page-error-banner');
+      expect(banner.getAttribute('role')).toBe('alert');
+      expect(banner.textContent).toContain('422 CYCLE_DETECTED');
+      expect(banner.textContent).toContain('Task cannot depend on itself during creation');
+    });
+
+    // Draft input is preserved on error so user does not lose their typed text
+    expect(quickInput.value).toBe('Cyclic Quick Capture Task #systems !urgent');
+  });
+
+  it('collapses and re-expands auto-expanded subtask trees via task-subtasks-toggle and serializes project areas for backend', async () => {
+    const fetchMock = stubTodosApiMocks();
+    renderTodosPage();
+
+    const parentTaskId = '01963000-0000-7000-8000-000000000801';
+    await waitFor(() => {
+      expect(screen.getByTestId(`signal-subtask-tree-${parentTaskId}`)).toBeTruthy();
+      expect(screen.getByTestId(`task-subtask-tree-${parentTaskId}`)).toBeTruthy();
+    });
+
+    const toggleBtn = screen.getByTestId(`task-subtasks-toggle-${parentTaskId}`);
+    // Click once to collapse the auto-expanded subtask tree
+    fireEvent.click(toggleBtn);
+    await waitFor(() => {
+      expect(screen.queryByTestId(`signal-subtask-tree-${parentTaskId}`)).toBeNull();
+      expect(screen.queryByTestId(`task-subtask-tree-${parentTaskId}`)).toBeNull();
+    });
+
+    // Click a second time to re-expand the subtask tree
+    fireEvent.click(toggleBtn);
+    await waitFor(() => {
+      expect(screen.getByTestId(`signal-subtask-tree-${parentTaskId}`)).toBeTruthy();
+      expect(screen.getByTestId(`task-subtask-tree-${parentTaskId}`)).toBeTruthy();
+    });
+
+    // Also verify inline + NEW PROJECT serializes 'system' -> 'systems'
+    fireEvent.click(screen.getByTestId('toggle-new-project-btn'));
+    const projNameInput = screen.getByTestId('new-project-name-input');
+    fireEvent.change(projNameInput, { target: { value: 'Kernel Scheduler' } });
+    fireEvent.submit(screen.getByTestId('new-project-form'));
+
+    await waitFor(() => {
+      const postProjCalls = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).endsWith('/api/projects') && (init?.method ?? '').toUpperCase() === 'POST',
+      );
+      expect(postProjCalls).toHaveLength(1);
+      const body = JSON.parse(String(postProjCalls[0]?.[1]?.body));
+      expect(body.area).toBe('systems');
+    });
+  });
 });

@@ -190,6 +190,9 @@ export function TodosPage() {
     onSuccess: () => {
       invalidateTodoQueries();
     },
+    onError: (err: unknown) => {
+      setPageBannerError(extractCycleDetectedError(err));
+    },
   });
 
   const deleteTaskMutation = useMutation({
@@ -197,6 +200,9 @@ export function TodosPage() {
     onSuccess: () => {
       setInspectedTask(null);
       invalidateTodoQueries();
+    },
+    onError: (err: unknown) => {
+      setPageBannerError(extractCycleDetectedError(err));
     },
   });
 
@@ -208,6 +214,9 @@ export function TodosPage() {
       setSelectedProjectId(created.id);
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['tasks-flow'] });
+    },
+    onError: (err: unknown) => {
+      setPageBannerError(extractCycleDetectedError(err));
     },
   });
 
@@ -234,6 +243,9 @@ export function TodosPage() {
       queryClient.invalidateQueries({ queryKey: ['tasks-capacity'] });
       queryClient.invalidateQueries({ queryKey: ['tasks-flow'] });
     },
+    onError: (err: unknown) => {
+      setPageBannerError(extractCycleDetectedError(err));
+    },
   });
 
   const logSessionMutation = useMutation({
@@ -259,6 +271,9 @@ export function TodosPage() {
       queryClient.invalidateQueries({ queryKey: ['tasks-capacity'] });
       queryClient.invalidateQueries({ queryKey: ['time-stats'] });
     },
+    onError: (err: unknown) => {
+      setPageBannerError(extractCycleDetectedError(err));
+    },
   });
 
   const deleteSessionMutation = useMutation({
@@ -268,6 +283,9 @@ export function TodosPage() {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['tasks-capacity'] });
       queryClient.invalidateQueries({ queryKey: ['time-stats'] });
+    },
+    onError: (err: unknown) => {
+      setPageBannerError(extractCycleDetectedError(err));
     },
   });
 
@@ -334,32 +352,40 @@ export function TodosPage() {
       }
     }
 
-    await createTaskMutation.mutateAsync({
-      title: cleanTitle,
-      quick_capture: trimmed,
-      tags: parsed.tags,
-      priority: (parsed.priority as TaskPriority) ?? 'medium',
-      energy_level: (parsed.energy_level as TaskEnergyLevel) ?? null,
-      scheduled_date: parsed.scheduled_date ?? null,
-      due_date: parsed.due_at ?? null,
-      estimated_minutes: parsed.estimated_minutes ?? null,
-      status: (parsed.status as TaskStatus) ?? 'todo',
-      project_id: resolvedProjectId ?? null,
-    });
+    try {
+      await createTaskMutation.mutateAsync({
+        title: cleanTitle,
+        quick_capture: trimmed,
+        tags: parsed.tags,
+        priority: (parsed.priority as TaskPriority) ?? 'medium',
+        energy_level: (parsed.energy_level as TaskEnergyLevel) ?? null,
+        scheduled_date: parsed.scheduled_date ?? null,
+        due_date: parsed.due_at ?? null,
+        estimated_minutes: parsed.estimated_minutes ?? null,
+        status: (parsed.status as TaskStatus) ?? 'todo',
+        project_id: resolvedProjectId ?? null,
+      });
 
-    setQuickCaptureText('');
+      setQuickCaptureText('');
+    } catch {
+      // Error already captured by createTaskMutation.onError -> setPageBannerError
+    }
   };
 
   const handleCreateNewProject = async (e: React.FormEvent) => {
     e.preventDefault();
     const clean = newProjectName.trim();
     if (!clean) return;
-    await createProjectMutation.mutateAsync({
-      name: clean,
-      area: newProjectArea,
-      status: 'active',
-      color: '#F87C18',
-    });
+    try {
+      await createProjectMutation.mutateAsync({
+        name: clean,
+        area: newProjectArea,
+        status: 'active',
+        color: '#F87C18',
+      });
+    } catch {
+      // Error already captured by createProjectMutation.onError -> setPageBannerError
+    }
   };
 
   const handleSelectTask = (task: TodoTask) => {
@@ -600,6 +626,12 @@ export function TodosPage() {
                 placeholder="Quick capture task... (#tag @deep_work !high today 45m)"
                 value={quickCaptureText}
                 onChange={(e) => setQuickCaptureText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleQuickCaptureSubmit(e as unknown as React.FormEvent);
+                  }
+                }}
                 style={{
                   flex: 1,
                   minHeight: '34px',

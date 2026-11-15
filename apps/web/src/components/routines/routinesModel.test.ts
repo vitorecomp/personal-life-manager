@@ -255,5 +255,19 @@ describe('routinesModel — F29 Pure Domain Logic & Boundary Guards', () => {
     expect(zeroMetrics.focusReadout).toBe('0.0h (0m)');
     expect(zeroMetrics.routineConsistencyReadout).toBe('0.0%');
     expect(zeroMetrics.vaultExportPath).toMatch(/^Reviews\/.*\.md$/);
+
+    const hostileMetrics = formatWeeklyReviewMetrics({
+      iso_week: Infinity as unknown as string,
+      week_start: Number.NaN as unknown as string,
+      week_end: -Infinity as unknown as string,
+      obsidian_vault_path: Infinity as unknown as string,
+    } as any);
+    const hostileSerialized = JSON.stringify(hostileMetrics);
+    expect(hostileSerialized).not.toContain('NaN');
+    expect(hostileSerialized).not.toContain('Infinity');
+    expect(hostileMetrics.isoWeek).toBe('2026-W46');
+    expect(hostileMetrics.weekStart).toBe('2026-11-09');
+    expect(hostileMetrics.weekEnd).toBe('2026-11-15');
+    expect(hostileMetrics.vaultExportPath).toBe('Reviews/2026-W46.md');
   });
 });

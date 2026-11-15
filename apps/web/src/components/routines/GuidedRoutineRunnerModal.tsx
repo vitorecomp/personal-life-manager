@@ -165,6 +165,8 @@ export function GuidedRoutineRunnerModal({
         setRunnerCompleted(true);
         setTimerRunning(false);
       }
+    } catch {
+      // Prevent unhandled promise rejection on step logging failure
     } finally {
       setSubmitting(false);
     }

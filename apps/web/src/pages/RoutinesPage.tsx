@@ -421,12 +421,16 @@ export function RoutinesPage() {
       }
     }
 
-    await logHabitMutation.mutateAsync({
-      routine_item_id: item.id,
-      log_date: selectedDate,
-      status,
-      numeric_value: numericValue,
-    });
+    try {
+      await logHabitMutation.mutateAsync({
+        routine_item_id: item.id,
+        log_date: selectedDate,
+        status,
+        numeric_value: numericValue,
+      });
+    } catch {
+      // Handled via mutation state
+    }
   };
 
   const renderHabitItemRow = (item: RoutineItem) => {

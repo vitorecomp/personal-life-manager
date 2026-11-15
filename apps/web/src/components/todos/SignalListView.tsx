@@ -207,7 +207,7 @@ export function SignalListView({
           );
           const isSelected = selectedTaskId === task.id;
           const proj = task.project_id ? projectMap.get(task.project_id) : undefined;
-          const isExpanded = Boolean(expandedSubtaskRows[task.id] || subtasks.length > 0);
+          const isExpanded = expandedSubtaskRows[task.id] ?? subtasks.length > 0;
           const actualMinutes = Math.round((task.actual_seconds ?? 0) / 60);
           const estMinutes = task.estimated_minutes ?? 30;
 
@@ -467,6 +467,7 @@ export function SignalListView({
                   </svg>
 
                   <div
+                    data-testid={`task-subtask-tree-${task.id}`}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',

@@ -369,6 +369,13 @@ export function normalizeProjectArea(raw: unknown): ProjectArea {
   return 'system';
 }
 
+function serializeProjectArea(raw: unknown): string {
+  const a = normalizeProjectArea(raw);
+  if (a === 'system') return 'systems';
+  if (a === 'work') return 'career';
+  return a;
+}
+
 export function normalizeTodoTask(raw: any): TodoTask {
   const obj =
     raw && typeof raw === 'object' && raw.task && !raw.id
@@ -472,7 +479,7 @@ export async function listProjects(): Promise<ProjectItem[]> {
 export async function createProject(payload: CreateProjectPayload): Promise<ProjectItem> {
   const body: Record<string, unknown> = {
     name: payload.name.trim(),
-    area: normalizeProjectArea(payload.area),
+    area: serializeProjectArea(payload.area),
     status: payload.status ?? 'active',
     color: payload.color || '#F87C18',
     ...(payload.goal_id ? { goal_id: payload.goal_id } : {}),
@@ -487,7 +494,7 @@ export async function updateProject(
 ): Promise<ProjectItem> {
   const body: Record<string, unknown> = {};
   if (payload.name !== undefined) body.name = payload.name.trim();
-  if (payload.area !== undefined) body.area = normalizeProjectArea(payload.area);
+  if (payload.area !== undefined) body.area = serializeProjectArea(payload.area);
   if (payload.goal_id !== undefined) body.goal_id = payload.goal_id;
   if (payload.status !== undefined) body.status = payload.status;
   if (payload.color !== undefined) body.color = payload.color;

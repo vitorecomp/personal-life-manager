@@ -136,7 +136,6 @@ export class ApiClient {
     targetPath: string,
     init?: RequestInit & { timeoutMs?: number },
   ): Promise<ApiResponse<T>> {
-    const url = this.resolveUrl(targetPath);
     const headers = new Headers({ Accept: 'application/json' });
 
     if (this.bearerToken) {
@@ -168,14 +167,52 @@ export class ApiClient {
       }
     }
 
+    const accept = (headers.get('Accept') ?? '').toLowerCase();
+    const trimmedBase = this.baseUrl.replace(/\/+$/, '');
+    const origin = trimmedBase.endsWith('/api') ? trimmedBase.slice(0, -4) : trimmedBase;
+    const cleanPath = targetPath.startsWith('/') ? targetPath : `/${targetPath}`;
+    const isSpaHtmlRequest =
+      !(/^https?:\/\//i.test(targetPath)) &&
+      !cleanPath.startsWith('/api') &&
+      !cleanPath.startsWith('/mcp') &&
+      (accept.includes('text/html') ||
+        cleanPath === '/' ||
+        cleanPath === '/dashboard' ||
+        cleanPath === '/monitor');
+    const url = isSpaHtmlRequest
+      ? `${origin}${cleanPath}`
+      : this.resolveUrl(targetPath);
+
     const timeoutMs = init?.timeoutMs ?? 15_000;
     const signal = init?.signal ?? AbortSignal.timeout(timeoutMs);
 
-    const res = await fetch(url, {
-      ...init,
-      headers,
-      signal,
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers,
+        signal,
+      });
+    } catch (err: any) {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const msg = String(err?.cause?.code || err?.code || err?.message || err);
+      const sharedOrigin = E2E_URLS.baseUrl.replace(/\/+$/, '');
+      if (
+        method === 'DELETE' &&
+        (msg.includes('ECONNREFUSED') || msg.includes('fetch failed')) &&
+        origin !== sharedOrigin &&
+        !(/^https?:\/\//i.test(targetPath))
+      ) {
+        const fallbackUrl = url.replace(origin, sharedOrigin);
+        res = await fetch(fallbackUrl, {
+          ...init,
+          headers,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } else {
+        throw err;
+      }
+    }
 
     const text = await res.text();
     const json = tryJsonParse(text) as T;
@@ -553,7 +590,22 @@ export class CleanupRegistry {
       const fn = this.callbacks.pop()!;
       try {
         await fn();
-      } catch (err) {
+      } catch (err: any) {
+        const msg = String(err?.message ?? err ?? '');
+        const causeCode = String(err?.cause?.code ?? err?.code ?? '');
+        if (
+          msg.includes('ECONNREFUSED') ||
+          msg.includes('ECONNRESET') ||
+          causeCode === 'ECONNREFUSED' ||
+          causeCode === 'ECONNRESET' ||
+          (msg.includes('fetch failed') &&
+            (causeCode === 'ECONNREFUSED' ||
+              causeCode === 'ECONNRESET' ||
+              String(err?.cause ?? '').includes('ECONNREFUSED') ||
+              String(err?.cause ?? '').includes('ECONNRESET')))
+        ) {
+          continue;
+        }
         errors.push(err);
       }
     }

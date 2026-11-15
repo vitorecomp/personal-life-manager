@@ -8849,6 +8849,12 @@
             "type": "string",
             "format": "date-time"
           },
+          "file_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },
@@ -11064,6 +11070,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "title": {
+            "type": "string"
           }
         }
       },
@@ -11708,6 +11717,8 @@
       "SpacedReviewDueItem": {
         "type": "object",
         "required": [
+          "id",
+          "lesson_id",
           "lesson",
           "course_title",
           "interval_label"
@@ -11715,6 +11726,10 @@
         "properties": {
           "course_title": {
             "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
           },
           "interval_days": {
             "type": "integer",
@@ -11725,6 +11740,10 @@
           },
           "lesson": {
             "$ref": "#/components/schemas/CourseLesson"
+          },
+          "lesson_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -13162,6 +13181,20 @@
               "string",
               "null"
             ]
+          },
+          "next_review_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "review_stage": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           },
           "sort_order": {
             "type": [

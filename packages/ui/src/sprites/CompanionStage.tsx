@@ -230,41 +230,58 @@ export function CompanionStage({
         border: `1px solid ${FUI_TOKENS.borderHairline}`,
         color: FUI_TOKENS.inkStark,
         borderRadius: '0px',
+        ...(mode === 'popover'
+          ? { maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' as const }
+          : {}),
       }}
     >
-      <FuiPanelHeader
-        title="FRIEREN // MASTERMIND COMPANION"
-        code={sessionKey ? `SESSION:${sessionKey}` : mode === 'mobile' ? (online ? 'IN_RANGE' : 'OFFLINE') : 'CMD+J'}
-        accent={online ? 'orange' : 'amber'}
-        actions={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', borderRadius: '0px' }}>
-            {gatewayMode === 'offline_mock' && (
-              <FuiBadge tone="amber">GATEWAY // OFFLINE_MOCK</FuiBadge>
-            )}
-            {/* Strictly Web-only ('popover'): NEVER render /hermes expansion in 'mobile' mode per 02-companion-app.md */}
-            {mode === 'popover' && onExpandToHermes && (
-              <FuiButton
-                data-testid="companion-expand-hermes"
-                variant="secondary"
-                size="sm"
-                onClick={() => onExpandToHermes(sessionKey)}
-              >
-                Expand in Full Hermes View ↗
-              </FuiButton>
-            )}
-            {mode === 'popover' && onOpenChange && (
-              <FuiButton
-                variant="secondary"
-                size="sm"
-                aria-label="Close companion popover"
-                onClick={() => onOpenChange(false)}
-              >
-                ✕
-              </FuiButton>
-            )}
-          </div>
+      <div
+        style={
+          mode === 'popover'
+            ? {
+                position: 'sticky',
+                top: 0,
+                zIndex: 10,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                borderRadius: '0px',
+              }
+            : { borderRadius: '0px' }
         }
-      />
+      >
+        <FuiPanelHeader
+          title="FRIEREN // MASTERMIND COMPANION"
+          code={sessionKey ? `SESSION:${sessionKey}` : mode === 'mobile' ? (online ? 'IN_RANGE' : 'OFFLINE') : 'CMD+J'}
+          accent={online ? 'orange' : 'amber'}
+          actions={
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', borderRadius: '0px' }}>
+              {gatewayMode === 'offline_mock' && (
+                <FuiBadge tone="amber">GATEWAY // OFFLINE_MOCK</FuiBadge>
+              )}
+              {/* Strictly Web-only ('popover'): NEVER render /hermes expansion in 'mobile' mode per 02-companion-app.md */}
+              {mode === 'popover' && onExpandToHermes && (
+                <FuiButton
+                  data-testid="companion-expand-hermes"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onExpandToHermes(sessionKey)}
+                >
+                  Expand in Full Hermes View ↗
+                </FuiButton>
+              )}
+              {mode === 'popover' && onOpenChange && (
+                <FuiButton
+                  variant="secondary"
+                  size="sm"
+                  aria-label="Close companion popover"
+                  onClick={() => onOpenChange(false)}
+                >
+                  ✕
+                </FuiButton>
+              )}
+            </div>
+          }
+        />
+      </div>
 
       {/* Page Context Chip */}
       {pageContext && (
@@ -347,6 +364,7 @@ export function CompanionStage({
             backgroundColor: FUI_TOKENS.bgCarbon,
             borderBottom: `1px solid ${FUI_TOKENS.borderHairline}`,
             borderRadius: '0px',
+            ...(mode === 'popover' ? { maxHeight: '96px', overflowY: 'auto' as const } : {}),
           }}
         >
           {nudges.map((nudge) => (
@@ -430,6 +448,7 @@ export function CompanionStage({
             gap: '10px',
             padding: '12px',
             borderRadius: '0px',
+            ...(mode === 'popover' ? { maxHeight: '220px', overflowY: 'auto' as const } : {}),
           }}
         >
           {/* Messages Feed */}
@@ -440,7 +459,7 @@ export function CompanionStage({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '6px',
-                maxHeight: '220px',
+                maxHeight: mode === 'popover' ? '120px' : '220px',
                 overflowY: 'auto',
                 borderRadius: '0px',
               }}

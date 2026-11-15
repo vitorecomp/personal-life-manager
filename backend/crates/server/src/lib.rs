@@ -252,6 +252,12 @@ impl AppState {
         hermes_life_ops::test_support::run_migrations(&self.life_ops.pool).await?;
         let _ = self.life_ops.ensure_admin_user().await?;
         let _ = self.life_ops.ensure_bootstrap_pat().await?;
+        let _ = sqlx::query(
+            "UPDATE dashboards SET in_rotation = TRUE \
+             WHERE slug IN ('tactical-ops', 'wealth-fire', 'strategy-lore', 'infra-knights')",
+        )
+        .execute(&self.life_ops.pool)
+        .await;
 
         // Background Server Prober loop
         let prober_svc = self.life_ops.clone();
@@ -481,10 +487,15 @@ pub fn normalize_json_payload(val: &mut Value) {
             if map.contains_key("type") && map.contains_key("trigger_type") {
                 map.remove("trigger_type");
             }
-            // Populate `config_json` for triggers when `cron_expr` or `event_filter` is passed at top-level
-            if map.contains_key("cron_expr") || map.contains_key("event_filter") {
+            // Populate `config_json` for triggers when `cron_expr`, `event_filter`, or `event_name` is passed at top-level
+            if map.contains_key("cron_expr")
+                || map.contains_key("event_filter")
+                || map.contains_key("event_name")
+            {
                 let cron_expr = map.remove("cron_expr");
-                let event_filter = map.remove("event_filter");
+                let event_filter = map
+                    .remove("event_filter")
+                    .or_else(|| map.remove("event_name"));
                 let cfg = map
                     .entry("config_json")
                     .or_insert_with(|| Value::Object(serde_json::Map::new()));
@@ -496,6 +507,47 @@ pub fn normalize_json_payload(val: &mut Value) {
                         cfg_obj.entry("event").or_insert(ev);
                     }
                 }
+            }
+
+            // Normalize `knight_archetype` aliases and casing
+            if let Some(arch_str) = map
+                .get("knight_archetype")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_ascii_lowercase())
+            {
+                let normalized_arch = match arch_str.as_str() {
+                    "paladin" => "paladin",
+                    "vanguard" | "ranger" => "vanguard",
+                    "lore_warden" | "lorewarden" | "lore-warden" | "lore warden" | "scholar"
+                    | "strategist" => "lore_warden",
+                    "inquisitor" | "sentinel" => "inquisitor",
+                    "artificer" => "artificer",
+                    other => other,
+                };
+                map.insert(
+                    "knight_archetype".to_string(),
+                    Value::String(normalized_arch.to_string()),
+                );
+            }
+
+            // Normalize `origin` aliases on HermesSession requests
+            if let Some(orig_str) = map
+                .get("origin")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_ascii_lowercase())
+            {
+                let normalized_orig = match orig_str.as_str() {
+                    "hermes_view" | "hermes_workspace" | "hermes" | "workspace" | "web"
+                    | "chat" => "hermes_view",
+                    "frieren_popover" | "mobile_companion" | "companion" | "mobile"
+                    | "frieren" | "popover" | "companion_popover" => "frieren_popover",
+                    "knight_run" | "knight" | "agent" | "agent_run" => "knight_run",
+                    other => other,
+                };
+                map.insert(
+                    "origin".to_string(),
+                    Value::String(normalized_orig.to_string()),
+                );
             }
 
             // Special handling: `zone` -> `grid_pos.zone` on Agent create/update
@@ -863,6 +915,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/hermes/sessions/{key}/fork",
             post(handle_fork_hermes_session),
+        )
+        .route(
+            "/api/hermes/sessions/{key}/distill",
+            post(handle_distill_session_to_vault),
         )
         .route("/api/hermes/chat/stream", post(handle_hermes_chat_stream))
         .route("/api/hermes/chat", post(handle_hermes_chat_stream))
@@ -1732,7 +1788,7 @@ async fn handle_sync_pull(
     let limit = params
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(500)
+        .unwrap_or(5000)
         .max(1);
     let resp = state.life_ops.sync_pull(since, limit).await?;
     Ok(Json(resp))
@@ -1764,7 +1820,7 @@ async fn handle_sync_pull_post(
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize)
         })
-        .unwrap_or(500)
+        .unwrap_or(5000)
         .max(1);
     let resp = state.life_ops.sync_pull(since, limit).await?;
     Ok(Json(resp))
@@ -2136,6 +2192,78 @@ async fn handle_fork_hermes_session(
     Ok((StatusCode::CREATED, Json(forked)))
 }
 
+async fn handle_distill_session_to_vault(
+    State(state): State<AppState>,
+    AxumPath(key): AxumPath<String>,
+    body: Bytes,
+) -> ServerResult<(StatusCode, Json<DistillVaultResponse>)> {
+    let val: Value = parse_optional_json_bytes(&body)?;
+    let session_opt = state.intelligence.get_session(&key).await.ok();
+    let title = val
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| session_opt.as_ref().map(|s| s.title.clone()))
+        .unwrap_or_else(|| format!("Distilled Session {key}"));
+    let content_md = val
+        .get("content_md")
+        .or_else(|| val.get("content"))
+        .or_else(|| val.get("markdown"))
+        .or_else(|| val.get("body"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| {
+            session_opt.as_ref().map(|s| {
+                let mut lines = Vec::new();
+                if let Some(arr) = s.messages_json.as_array() {
+                    for msg in arr {
+                        let role = msg
+                            .get("role")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("assistant");
+                        let content = msg
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if !content.trim().is_empty() {
+                            lines.push(format!("**{role}**: {content}"));
+                        }
+                    }
+                }
+                if lines.is_empty() {
+                    format!("Distilled summary for session `{}`.", s.session_key)
+                } else {
+                    lines.join("\n\n")
+                }
+            })
+        })
+        .unwrap_or_else(|| format!("Distilled summary for session `{key}`."));
+    let tags = val
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_else(|| vec!["hermes-distill".to_string()]);
+
+    let distilled = state
+        .intelligence
+        .distill_to_vault(DistillVaultRequest {
+            title,
+            content_md,
+            session_key: Some(key),
+            tags,
+        })
+        .await?;
+    Ok((StatusCode::CREATED, Json(distilled)))
+}
+
 async fn handle_hermes_chat_stream(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2153,11 +2281,13 @@ async fn handle_hermes_chat_stream(
         .stream_chat(header_session_key.as_deref(), req)
         .await?;
 
-    let stream = futures::stream::iter(events.into_iter().map(|ev| {
+    let stream = futures::stream::unfold(events.into_iter(), |mut iter| async move {
+        let ev = iter.next()?;
+        tokio::task::yield_now().await;
         let event_name = ev.event_name();
         let data = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".to_string());
-        Ok(SseEvent::default().event(event_name).data(data))
-    }));
+        Some((Ok(SseEvent::default().event(event_name).data(data)), iter))
+    });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
@@ -3608,7 +3738,7 @@ async fn handle_get_asset_candles(
         .get("range")
         .or_else(|| params.get("timeframe"))
         .map(String::as_str)
-        .unwrap_or("90D");
+        .unwrap_or("1M");
     let candles = state.life_ops.get_asset_candles(id, range).await?;
     Ok(Json(candles))
 }

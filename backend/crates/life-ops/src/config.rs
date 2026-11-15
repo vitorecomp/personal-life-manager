@@ -34,15 +34,20 @@ impl LifeOpsConfig {
         let redis_url = std::env::var("REDIS_URL")
             .ok()
             .or_else(|| Some("redis://127.0.0.1:6379".to_string()));
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .unwrap_or_else(|| std::path::Path::new("."));
         let second_brain_dir = std::env::var("SECOND_BRAIN_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("../data/second-brain"));
+            .unwrap_or_else(|_| repo_root.join("data/second-brain"));
         let youtube_lists_db = std::env::var("YOUTUBE_LISTS_DB")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("../data/database/youtube-lists.sqlite"));
+            .unwrap_or_else(|_| repo_root.join("data/database/youtube-lists.sqlite"));
         let youtube_lists_notes_dir = std::env::var("YOUTUBE_LISTS_NOTES_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("../data/knowledge-data/lists/youtube"));
+            .unwrap_or_else(|_| repo_root.join("data/knowledge-data/lists/youtube"));
         let admin_user = std::env::var("HERMES_ADMIN_USER")
             .ok()
             .filter(|v| !v.trim().is_empty())

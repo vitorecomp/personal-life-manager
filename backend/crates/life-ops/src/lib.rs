@@ -40,7 +40,6 @@ mod tests {
         sync::{SyncMutationInput, SyncOp, SyncPushRequest},
     };
     use pgvector::Vector;
-    use sqlx::PgPool;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -149,22 +148,14 @@ mod tests {
             .unwrap();
         assert_eq!(sync_log_count, 8);
 
-        // 5. Also ensure the main `hermes_os` database has all migrations applied idempotently
-        let main_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://hermes:hermes@127.0.0.1:5432/hermes_os".to_string());
-        let main_pool = PgPool::connect(&main_url).await.expect("connect hermes_os");
-        run_migrations(&main_pool)
+        // 5. Verify idempotent re-run of migrations and ensure_admin_user on the isolated TestDb
+        run_migrations(&test_db.pool)
             .await
-            .expect("apply migrations to main hermes_os database");
-        // Refresh operator password hash on hermes_os if needed
-        let mut main_cfg = LifeOpsConfig::from_env();
-        main_cfg.database_url = main_url;
-        let main_svc = LifeOpsService::new(main_pool.clone(), None, main_cfg);
-        main_svc
-            .ensure_admin_user()
+            .expect("re-apply migrations idempotently to isolated TestDb");
+        let svc = LifeOpsService::from_test_db(&test_db);
+        svc.ensure_admin_user()
             .await
-            .expect("ensure_admin_user on main hermes_os");
-        main_pool.close().await;
+            .expect("ensure_admin_user on isolated TestDb");
 
         test_db.teardown().await;
     }
@@ -2176,10 +2167,11 @@ mod tests {
         let svc = LifeOpsService::from_test_db(&test_db);
         let mut events_rx = svc.subscribe_events();
 
-        // 1. Empty portfolio allocation has 0 waffle tiles
+        // 1. Empty portfolio allocation returns 200 UNALLOCATED waffle tiles
         let empty_alloc = svc.get_portfolio_allocation(None, None).await.unwrap();
         assert_eq!(empty_alloc.total_brl_cents, 0);
-        assert!(empty_alloc.waffle_tiles.is_empty());
+        assert_eq!(empty_alloc.waffle_tiles.len(), 200);
+        assert!(empty_alloc.waffle_tiles.iter().all(|t| t.symbol == "UNALLOCATED"));
 
         // 2. Create 3 holdings with equal value (33.333% each) to verify Hare-Niemeyer largest-remainder -> 200 tiles
         let a1 = svc

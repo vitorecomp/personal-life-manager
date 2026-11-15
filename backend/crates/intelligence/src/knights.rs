@@ -502,6 +502,8 @@ impl IntelligenceService {
         .await
         .map_err(ApiError::from)?;
 
+        self.register_cron_trigger_in_scheduler(&trigger).await;
+
         Ok(trigger)
     }
 
@@ -562,6 +564,8 @@ impl IntelligenceService {
         .fetch_one(&self.pool)
         .await
         .map_err(ApiError::from)?;
+
+        self.register_cron_trigger_in_scheduler(&updated).await;
 
         Ok(updated)
     }
@@ -1036,10 +1040,118 @@ impl IntelligenceService {
                             }
                             if let Some(cc) = val
                                 .get("cost_cents")
+                                .or_else(|| val.pointer("/usage/cost_cents"))
                                 .and_then(|v| v.as_i64())
                                 .filter(|&c| c > 0)
                             {
                                 gateway_cost_cents = Some(cc);
+                            }
+
+                            if req.tool_call.is_none()
+                                && let Some(tc_arr) = val
+                                    .get("tool_calls")
+                                    .and_then(|v| v.as_array())
+                                    .or_else(|| {
+                                        val.pointer("/choices/0/message/tool_calls")
+                                            .and_then(|v| v.as_array())
+                                    })
+                                    .cloned()
+                            {
+                                for tc in tc_arr {
+                                    let Some(tc_name) = tc
+                                        .get("name")
+                                        .or_else(|| tc.get("tool_name"))
+                                        .or_else(|| tc.pointer("/function/name"))
+                                        .and_then(|v| v.as_str())
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .map(ToString::to_string)
+                                    else {
+                                        continue;
+                                    };
+                                    let raw_args = tc
+                                        .get("arguments")
+                                        .or_else(|| tc.get("args"))
+                                        .or_else(|| tc.pointer("/function/arguments"))
+                                        .cloned()
+                                        .unwrap_or_else(|| serde_json::json!({}));
+                                    let tc_args = if let Some(s) = raw_args.as_str() {
+                                        serde_json::from_str::<serde_json::Value>(s)
+                                            .unwrap_or_else(|_| serde_json::json!({}))
+                                    } else {
+                                        raw_args
+                                    };
+
+                                    match self
+                                        .execute_mcp_tool_with_autonomy(
+                                            &tc_name,
+                                            tc_args,
+                                            McpCallContext {
+                                                session_key: session_key.clone(),
+                                                agent_run_id: Some(run_id),
+                                                knight_policy: Some(
+                                                    agent_telemetry.agent.tools_policy.clone(),
+                                                ),
+                                                allowed_tools: None,
+                                                bypass_approval_gate: false,
+                                            },
+                                        )
+                                        .await
+                                    {
+                                        Ok(McpToolExecutionOutcome::ExecutedRead {
+                                            autonomy_tier,
+                                            result,
+                                            ..
+                                        }) => {
+                                            steps.push(serde_json::json!({
+                                                "step": steps.len() + 1,
+                                                "kind": "mcp_tool_executed",
+                                                "tool_name": tc_name,
+                                                "autonomy_tier": autonomy_tier,
+                                                "result": result,
+                                                "undo_id": serde_json::Value::Null,
+                                            }));
+                                        }
+                                        Ok(McpToolExecutionOutcome::ExecutedWithUndo {
+                                            autonomy_tier,
+                                            undo_action,
+                                            result,
+                                            ..
+                                        }) => {
+                                            steps.push(serde_json::json!({
+                                                "step": steps.len() + 1,
+                                                "kind": "mcp_tool_executed",
+                                                "tool_name": tc_name,
+                                                "autonomy_tier": autonomy_tier,
+                                                "result": result,
+                                                "undo_id": undo_action.id,
+                                            }));
+                                        }
+                                        Ok(McpToolExecutionOutcome::PendingApproval {
+                                            approval,
+                                            ..
+                                        }) => {
+                                            final_status = AgentRunStatus::AwaitingApproval;
+                                            steps.push(serde_json::json!({
+                                                "step": steps.len() + 1,
+                                                "kind": "mcp_tool_awaiting_approval",
+                                                "tool_name": tc_name,
+                                                "approval_id": approval.id,
+                                                "status": "awaiting_approval",
+                                            }));
+                                        }
+                                        Err(err) => {
+                                            final_status = AgentRunStatus::Failed;
+                                            error_message = Some(err.message().to_string());
+                                            steps.push(serde_json::json!({
+                                                "step": steps.len() + 1,
+                                                "kind": "mcp_tool_denied_or_failed",
+                                                "tool_name": tc_name,
+                                                "error": err.message(),
+                                            }));
+                                        }
+                                    }
+                                }
                             }
                         } else if !raw_text.trim().is_empty() {
                             report_text = raw_text.trim().to_string();
@@ -1231,11 +1343,55 @@ impl IntelligenceService {
         Ok(runs)
     }
 
+    async fn register_cron_trigger_in_scheduler(&self, trig: &AgentTrigger) {
+        if !trig.enabled || trig.trigger_type != AgentTriggerType::Cron {
+            return;
+        }
+        let guard = self.knight_scheduler.lock().await;
+        let Some(ref scheduler) = *guard else {
+            return;
+        };
+        let raw_cron = trig
+            .config_json
+            .get("cron")
+            .or_else(|| trig.config_json.get("cron_expr"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("0 0 7 * * *");
+        let cron_expr = normalize_cron_for_scheduler(raw_cron);
+        let svc = self.clone();
+        let agent_id = trig.agent_id;
+        let trig_id = trig.id;
+
+        if let Ok(job) = Job::new_async(cron_expr.as_str(), move |_uuid, _l| {
+            let svc_inner = svc.clone();
+            Box::pin(async move {
+                let _ = svc_inner
+                    .dispatch_agent(
+                        agent_id,
+                        DispatchAgentRequest {
+                            dry_run: Some(false),
+                            sample_input: Some("Scheduled Cron Execution".to_string()),
+                            trigger_id: Some(trig_id),
+                            tool_call: None,
+                            estimated_cost_cents: Some(2),
+                        },
+                    )
+                    .await;
+            })
+        }) {
+            let _ = scheduler.add(job).await;
+        }
+    }
+
     /// Starts the `tokio-cron-scheduler` background scheduler and `SystemEvent` listener for Knights.
     pub async fn spawn_knight_scheduler(&self) -> Result<JobScheduler, ApiError> {
         let scheduler = JobScheduler::new().await.map_err(|e| {
             ApiError::internal(format!("Failed to initialize JobScheduler: {e}"))
         })?;
+        {
+            let mut guard = self.knight_scheduler.lock().await;
+            *guard = Some(scheduler.clone());
+        }
 
         let cron_triggers = sqlx::query_as::<_, AgentTrigger>(
             r#"

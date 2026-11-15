@@ -28,7 +28,14 @@ impl Default for CycleStatus {
 pub enum GoalPillar {
     #[serde(alias = "career_craft", alias = "craft")]
     Career,
-    #[serde(alias = "health_vitality")]
+    #[serde(
+        alias = "health_vitality",
+        alias = "vitality",
+        alias = "fitness",
+        alias = "wellness",
+        alias = "Health",
+        alias = "Vitality"
+    )]
     Health,
     #[serde(alias = "learning_mastery")]
     Learning,

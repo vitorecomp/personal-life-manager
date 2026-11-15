@@ -13,10 +13,40 @@ use crate::hermes::ChatToolCallDirective;
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum KnightArchetype {
+    #[serde(alias = "Paladin", alias = "PALADIN")]
     Paladin,
+    #[serde(
+        alias = "Vanguard",
+        alias = "VANGUARD",
+        alias = "Ranger",
+        alias = "ranger",
+        alias = "RANGER"
+    )]
     Vanguard,
+    #[serde(
+        alias = "LoreWarden",
+        alias = "Lore_Warden",
+        alias = "Lore-Warden",
+        alias = "Lore Warden",
+        alias = "lore-warden",
+        alias = "LORE_WARDEN",
+        alias = "Strategist",
+        alias = "strategist",
+        alias = "STRATEGIST",
+        alias = "Scholar",
+        alias = "scholar",
+        alias = "SCHOLAR"
+    )]
     LoreWarden,
+    #[serde(
+        alias = "Inquisitor",
+        alias = "INQUISITOR",
+        alias = "Sentinel",
+        alias = "sentinel",
+        alias = "SENTINEL"
+    )]
     Inquisitor,
+    #[serde(alias = "Artificer", alias = "ARTIFICER")]
     Artificer,
 }
 

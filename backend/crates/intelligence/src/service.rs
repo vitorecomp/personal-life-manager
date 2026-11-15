@@ -6,7 +6,8 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
 use hermes_domain::events::SystemEvent;
 use hermes_life_ops::{LifeOpsService, test_support::TestDb};
 use sqlx::PgPool;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio_cron_scheduler::JobScheduler;
 use uuid::Uuid;
 
 use crate::DEFAULT_HERMES_GATEWAY_URL;
@@ -21,6 +22,7 @@ pub struct IntelligenceService {
     pub events_tx: broadcast::Sender<SystemEvent>,
     pub http_client: reqwest::Client,
     pub dismissed_nudges: Arc<RwLock<HashSet<Uuid>>>,
+    pub knight_scheduler: Arc<Mutex<Option<JobScheduler>>>,
 }
 
 impl IntelligenceService {
@@ -61,6 +63,7 @@ impl IntelligenceService {
             events_tx,
             http_client,
             dismissed_nudges: Arc::new(RwLock::new(HashSet::new())),
+            knight_scheduler: Arc::new(Mutex::new(None)),
         }
     }
 

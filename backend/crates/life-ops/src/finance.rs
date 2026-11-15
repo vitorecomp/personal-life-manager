@@ -7,7 +7,7 @@ use chrono::{Datelike, Duration, Months, Utc};
 use hermes_domain::error::ApiError;
 use hermes_domain::events::SystemEvent;
 use hermes_domain::finance::{
-    AllocationResponse, AssetCandlesResponse, AssetListFilter, CandlestickBar,
+    AllocationResponse, AssetCandlesResponse, AssetClass, AssetListFilter, CandlestickBar,
     CreatePortfolioAssetRequest, CreatePortfolioSnapshotRequest, CurrencyCode,
     FireProjectionResponse, FireSimulationRequest, FireTrajectoryPoint, MonthlyInvestmentPlan,
     PortfolioAsset, PortfolioSnapshot, QuoteRefreshResponse, RebalanceRecommendation,
@@ -348,9 +348,10 @@ impl LifeOpsService {
         id: Uuid,
         range_key: &str,
     ) -> Result<AssetCandlesResponse, ApiError> {
+        let asset = self.get_asset(id).await?;
         let raw_upper = range_key.trim().to_ascii_uppercase();
         let normalized_range = match raw_upper.as_str() {
-            "" | "30D" | "1MO" | "MONTH" => "1M".to_string(),
+            "" | "30D" | "1MO" | "MONTH" | "90D" | "3M" | "3MO" | "QUARTER" => "1M".to_string(),
             "24H" | "DAY" => "1D".to_string(),
             "1W" | "WEEK" => "7D".to_string(),
             "365D" | "12M" | "YEAR" => "1Y".to_string(),
@@ -365,8 +366,6 @@ impl LifeOpsService {
                 "range_key must be one of '1D', '7D', '1M', '1Y', or 'ALL'",
             ));
         }
-
-        let asset = self.get_asset(id).await?;
         let history_row: Option<(serde_json::Value, String)> = sqlx::query_as(
             "SELECT candles_json, quote_source FROM asset_quote_history WHERE symbol = $1 AND range_key = $2",
         )
@@ -1071,7 +1070,13 @@ pub fn build_hare_niemeyer_waffle_tiles(
     total_brl_cents: i64,
 ) -> Vec<WaffleTile> {
     if total_brl_cents <= 0 {
-        return Vec::new();
+        return (0..200)
+            .map(|tile_index| WaffleTile {
+                tile_index,
+                symbol: "UNALLOCATED".to_string(),
+                asset_class: AssetClass::Cash,
+            })
+            .collect();
     }
 
     let positive: Vec<&(PortfolioAsset, i64, i64)> = holding_vals
@@ -1079,7 +1084,13 @@ pub fn build_hare_niemeyer_waffle_tiles(
         .filter(|(_, brl, _)| *brl > 0)
         .collect();
     if positive.is_empty() {
-        return Vec::new();
+        return (0..200)
+            .map(|tile_index| WaffleTile {
+                tile_index,
+                symbol: "UNALLOCATED".to_string(),
+                asset_class: AssetClass::Cash,
+            })
+            .collect();
     }
 
     let total_dec = Decimal::from(total_brl_cents);

@@ -1652,6 +1652,7 @@ pub fn parse_quick_capture_with_today(
     };
 
     Ok(QuickCaptureParsed {
+        title: clean_title.clone(),
         clean_title,
         tags,
         energy_level,

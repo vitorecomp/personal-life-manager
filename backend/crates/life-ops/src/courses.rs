@@ -606,16 +606,19 @@ impl LifeOpsService {
         let sort_order = req.sort_order.unwrap_or(existing.sort_order);
 
         let became_done = matches!(status, LessonStatus::Completed | LessonStatus::Distilled)
-            && existing.completed_at.is_none();
+            && (existing.completed_at.is_none()
+                || (req.status == Some(LessonStatus::Completed) && existing.review_stage >= 3));
         let completed_at = if became_done {
             Some(Utc::now())
         } else {
             existing.completed_at
         };
-        let (review_stage, next_review_date) = if became_done {
-            (0_i16, Some(Utc::now().date_naive() + Duration::days(7)))
+        let (review_stage, next_review_date) = if let Some(explicit_date) = req.next_review_date {
+            (req.review_stage.unwrap_or(existing.review_stage), Some(explicit_date))
+        } else if became_done {
+            (req.review_stage.unwrap_or(0_i16), Some(Utc::now().date_naive() + Duration::days(7)))
         } else {
-            (existing.review_stage, existing.next_review_date)
+            (req.review_stage.unwrap_or(existing.review_stage), existing.next_review_date)
         };
 
         let updated = sqlx::query_as::<_, CourseLesson>(
@@ -669,6 +672,8 @@ impl LifeOpsService {
                 vault_note_path: None,
                 key_summary_md: req.key_summary_md,
                 sort_order: None,
+                review_stage: None,
+                next_review_date: None,
             },
         )
         .await
@@ -1211,6 +1216,8 @@ impl LifeOpsService {
             };
 
             items.push(SpacedReviewDueItem {
+                id: lesson.id,
+                lesson_id: lesson.id,
                 lesson,
                 course_title,
                 interval_label,
@@ -1446,6 +1453,18 @@ fn sqlite_has_table(conn: &Connection, table_name: &str) -> bool {
         > 0
 }
 
+fn sqlite_table_columns(conn: &Connection, table_name: &str) -> HashSet<String> {
+    let mut cols = HashSet::new();
+    if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table_name})"))
+        && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1))
+    {
+        for col in rows.flatten() {
+            cols.insert(col.to_ascii_lowercase());
+        }
+    }
+    cols
+}
+
 fn read_youtube_playlists_readonly(
     db_path: &Path,
     imported_ids: &HashSet<String>,
@@ -1464,6 +1483,18 @@ fn read_youtube_playlists_readonly(
         return Ok(Vec::new());
     };
 
+    let p_cols = sqlite_table_columns(&conn, playlist_table);
+    let p_id = if p_cols.contains("playlist_id") {
+        "p.playlist_id"
+    } else {
+        "p.id"
+    };
+    let p_where = if p_cols.contains("removed_at") {
+        "WHERE p.removed_at IS NULL"
+    } else {
+        ""
+    };
+
     let video_table = if sqlite_has_table(&conn, "video") {
         Some("video")
     } else if sqlite_has_table(&conn, "videos") {
@@ -1471,47 +1502,90 @@ fn read_youtube_playlists_readonly(
     } else {
         None
     };
+    let has_detail = sqlite_has_table(&conn, "video_detail");
     let has_ai_note = sqlite_has_table(&conn, "ai_note");
 
-    let sql = match (video_table, has_ai_note) {
-        (Some(vt), true) => format!(
+    let sql = if let Some(vt) = video_table {
+        let v_cols = sqlite_table_columns(&conn, vt);
+        let v_id = if v_cols.contains("video_id") {
+            "v.video_id"
+        } else {
+            "v.id"
+        };
+
+        let mut v_conds = vec![format!("v.playlist_id = {p_id}")];
+        if v_cols.contains("removed_at") {
+            v_conds.push("v.removed_at IS NULL".to_string());
+        }
+        if v_cols.contains("title") {
+            v_conds.push(
+                "LOWER(TRIM(COALESCE(v.title, ''))) NOT IN ('[private video]', '[deleted video]', 'private video', 'deleted video')".to_string(),
+            );
+        }
+
+        let detail_join = if has_detail {
+            let d_cols = sqlite_table_columns(&conn, "video_detail");
+            if d_cols.contains("title") {
+                v_conds.push(
+                    "LOWER(TRIM(COALESCE(d.title, ''))) NOT IN ('[private video]', '[deleted video]', 'private video', 'deleted video')".to_string(),
+                );
+            }
+            if d_cols.contains("availability") {
+                v_conds.push(
+                    "LOWER(TRIM(COALESCE(d.availability, ''))) NOT IN ('private', 'unavailable', 'deleted', 'needs_auth')".to_string(),
+                );
+            }
+            if d_cols.contains("note_path") {
+                v_conds.push("COALESCE(d.note_path, '') NOT LIKE 'removed/%'".to_string());
+            }
+            format!("LEFT JOIN video_detail d ON d.video_id = {v_id}")
+        } else {
+            String::new()
+        };
+
+        let active_pred = v_conds.join(" AND ");
+        let distilled_expr = if has_ai_note {
+            let a_cols = sqlite_table_columns(&conn, "ai_note");
+            let a_status_cond = if a_cols.contains("status") {
+                " AND a.status = 'done'"
+            } else {
+                ""
+            };
+            format!(
+                "COUNT(DISTINCT CASE WHEN ({active_pred}) AND EXISTS (SELECT 1 FROM ai_note a WHERE a.video_id = {v_id}{a_status_cond}) THEN {v_id} END)"
+            )
+        } else {
+            "0".to_string()
+        };
+
+        format!(
             r#"
             SELECT
-                p.playlist_id,
+                {p_id} AS playlist_id,
                 p.title,
-                COUNT(v.video_id) AS video_count,
-                COUNT(a.video_id) AS distilled_count
+                COUNT(DISTINCT CASE WHEN ({active_pred}) THEN {v_id} END) AS video_count,
+                {distilled_expr} AS distilled_count
             FROM {playlist_table} p
-            LEFT JOIN {vt} v ON v.playlist_id = p.playlist_id
-            LEFT JOIN ai_note a ON a.video_id = v.video_id
-            GROUP BY p.playlist_id, p.title
+            LEFT JOIN {vt} v ON v.playlist_id = {p_id}
+            {detail_join}
+            {p_where}
+            GROUP BY {p_id}, p.title
             ORDER BY p.title ASC
             "#
-        ),
-        (Some(vt), false) => format!(
+        )
+    } else {
+        format!(
             r#"
             SELECT
-                p.playlist_id,
-                p.title,
-                COUNT(v.video_id) AS video_count,
-                0 AS distilled_count
-            FROM {playlist_table} p
-            LEFT JOIN {vt} v ON v.playlist_id = p.playlist_id
-            GROUP BY p.playlist_id, p.title
-            ORDER BY p.title ASC
-            "#
-        ),
-        (None, _) => format!(
-            r#"
-            SELECT
-                p.playlist_id,
+                {p_id} AS playlist_id,
                 p.title,
                 0 AS video_count,
                 0 AS distilled_count
             FROM {playlist_table} p
+            {p_where}
             ORDER BY p.title ASC
             "#
-        ),
+        )
     };
 
     let mut stmt = conn
@@ -1561,19 +1635,31 @@ fn extract_playlist_from_sqlite_readonly(
         )));
     };
 
+    let p_cols = sqlite_table_columns(&conn, playlist_table);
+    let p_id_col = if p_cols.contains("playlist_id") {
+        "playlist_id"
+    } else {
+        "id"
+    };
+    let p_folder_expr = if p_cols.contains("folder") {
+        "folder"
+    } else {
+        "NULL"
+    };
+    let p_removed_cond = if p_cols.contains("removed_at") {
+        " AND removed_at IS NULL"
+    } else {
+        ""
+    };
+
     let (title, folder): (String, Option<String>) = conn
         .query_row(
-            &format!("SELECT title, folder FROM {playlist_table} WHERE playlist_id = ?1"),
+            &format!(
+                "SELECT title, {p_folder_expr} FROM {playlist_table} WHERE {p_id_col} = ?1{p_removed_cond}"
+            ),
             [playlist_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .or_else(|_| {
-            conn.query_row(
-                &format!("SELECT title, NULL FROM {playlist_table} WHERE playlist_id = ?1"),
-                [playlist_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-        })
         .map_err(|_| ApiError::not_found(format!("YouTube playlist {playlist_id} not found")))?;
 
     let video_table = if sqlite_has_table(&conn, "video") {
@@ -1588,65 +1674,163 @@ fn extract_playlist_from_sqlite_readonly(
         });
     };
 
+    let v_cols = sqlite_table_columns(&conn, video_table);
+    let v_id = if v_cols.contains("video_id") {
+        "v.video_id"
+    } else {
+        "v.id"
+    };
+    let v_url = if v_cols.contains("url") {
+        "v.url"
+    } else {
+        "NULL"
+    };
+    let v_dur = if v_cols.contains("duration_seconds") {
+        "CAST(v.duration_seconds AS TEXT)"
+    } else if v_cols.contains("duration") {
+        "CAST(v.duration AS TEXT)"
+    } else {
+        "NULL"
+    };
+
     let has_detail = sqlite_has_table(&conn, "video_detail");
     let has_ai_note = sqlite_has_table(&conn, "ai_note");
 
-    let sql = match (has_detail, has_ai_note) {
-        (true, true) => format!(
-            r#"
-            SELECT
-                v.video_id,
-                COALESCE(d.title, v.title) AS title,
-                v.url,
-                d.duration,
-                d.description,
-                d.note_path,
-                d.note_file,
-                a.output_text,
-                a.output_file
-            FROM {video_table} v
-            LEFT JOIN video_detail d ON d.video_id = v.video_id
-            LEFT JOIN ai_note a ON a.video_id = v.video_id
-            WHERE v.playlist_id = ?1
-            ORDER BY v.position ASC, v.rowid ASC
-            "#
-        ),
-        (true, false) => format!(
-            r#"
-            SELECT
-                v.video_id,
-                COALESCE(d.title, v.title) AS title,
-                v.url,
-                d.duration,
-                d.description,
-                d.note_path,
-                d.note_file,
-                NULL AS output_text,
-                NULL AS output_file
-            FROM {video_table} v
-            LEFT JOIN video_detail d ON d.video_id = v.video_id
-            WHERE v.playlist_id = ?1
-            ORDER BY v.position ASC, v.rowid ASC
-            "#
-        ),
-        (false, _) => format!(
-            r#"
-            SELECT
-                v.video_id,
-                v.title,
-                v.url,
-                NULL AS duration,
-                NULL AS description,
-                NULL AS note_path,
-                NULL AS note_file,
-                NULL AS output_text,
-                NULL AS output_file
-            FROM {video_table} v
-            WHERE v.playlist_id = ?1
-            ORDER BY v.position ASC, v.rowid ASC
-            "#
-        ),
+    let mut where_clauses = vec!["v.playlist_id = ?1".to_string()];
+    if v_cols.contains("removed_at") {
+        where_clauses.push("v.removed_at IS NULL".to_string());
+    }
+    if v_cols.contains("title") {
+        where_clauses.push(
+            "LOWER(TRIM(COALESCE(v.title, ''))) NOT IN ('[private video]', '[deleted video]', 'private video', 'deleted video')".to_string(),
+        );
+    }
+
+    let (title_expr, dur_expr, desc_expr, note_path_expr, note_file_expr, detail_join) =
+        if has_detail {
+            let d_cols = sqlite_table_columns(&conn, "video_detail");
+            let t_expr = if d_cols.contains("title") {
+                where_clauses.push(
+                    "LOWER(TRIM(COALESCE(d.title, ''))) NOT IN ('[private video]', '[deleted video]', 'private video', 'deleted video')".to_string(),
+                );
+                "COALESCE(d.title, v.title)".to_string()
+            } else {
+                "v.title".to_string()
+            };
+            if d_cols.contains("availability") {
+                where_clauses.push(
+                    "LOWER(TRIM(COALESCE(d.availability, ''))) NOT IN ('private', 'unavailable', 'deleted', 'needs_auth')".to_string(),
+                );
+            }
+            if d_cols.contains("note_path") {
+                where_clauses.push("COALESCE(d.note_path, '') NOT LIKE 'removed/%'".to_string());
+            }
+            let d_dur = if d_cols.contains("duration_seconds") {
+                format!("COALESCE(CAST(d.duration_seconds AS TEXT), {v_dur})")
+            } else if d_cols.contains("duration") {
+                format!("COALESCE(CAST(d.duration AS TEXT), {v_dur})")
+            } else {
+                v_dur.to_string()
+            };
+            let d_desc = if d_cols.contains("description") {
+                "d.description"
+            } else {
+                "NULL"
+            };
+            let d_npath = if d_cols.contains("note_path") {
+                "d.note_path"
+            } else {
+                "NULL"
+            };
+            let d_nfile = if d_cols.contains("note_file") {
+                "d.note_file"
+            } else {
+                "NULL"
+            };
+            (
+                t_expr,
+                d_dur,
+                d_desc.to_string(),
+                d_npath.to_string(),
+                d_nfile.to_string(),
+                format!("LEFT JOIN video_detail d ON d.video_id = {v_id}"),
+            )
+        } else {
+            (
+                "v.title".to_string(),
+                v_dur.to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                "NULL".to_string(),
+                String::new(),
+            )
+        };
+
+    let (ai_text_expr, ai_file_expr) = if has_ai_note {
+        let a_cols = sqlite_table_columns(&conn, "ai_note");
+        let a_text_col = if a_cols.contains("output_text") {
+            "a.output_text"
+        } else if a_cols.contains("summary_md") {
+            "a.summary_md"
+        } else {
+            "NULL"
+        };
+        let a_file_col = if a_cols.contains("output_file") {
+            "a.output_file"
+        } else if a_cols.contains("note_rel_path") {
+            "a.note_rel_path"
+        } else {
+            "NULL"
+        };
+        let a_status_cond = if a_cols.contains("status") {
+            " AND a.status = 'done'"
+        } else {
+            ""
+        };
+        let a_order = if a_cols.contains("kind") && a_cols.contains("completed_at") {
+            "ORDER BY CASE WHEN a.kind = 'knowledge' THEN 0 ELSE 1 END, a.completed_at DESC"
+        } else if a_cols.contains("kind") {
+            "ORDER BY CASE WHEN a.kind = 'knowledge' THEN 0 ELSE 1 END"
+        } else {
+            ""
+        };
+        (
+            format!(
+                "(SELECT {a_text_col} FROM ai_note a WHERE a.video_id = {v_id}{a_status_cond} {a_order} LIMIT 1)"
+            ),
+            format!(
+                "(SELECT {a_file_col} FROM ai_note a WHERE a.video_id = {v_id}{a_status_cond} {a_order} LIMIT 1)"
+            ),
+        )
+    } else {
+        ("NULL".to_string(), "NULL".to_string())
     };
+
+    let where_sql = where_clauses.join(" AND ");
+    let order_sql = if v_cols.contains("position") {
+        "ORDER BY v.position ASC, v.rowid ASC"
+    } else {
+        "ORDER BY v.rowid ASC"
+    };
+
+    let sql = format!(
+        r#"
+        SELECT
+            {v_id} AS video_id,
+            {title_expr} AS title,
+            {v_url} AS url,
+            {dur_expr} AS duration,
+            {desc_expr} AS description,
+            {note_path_expr} AS note_path,
+            {note_file_expr} AS note_file,
+            {ai_text_expr} AS output_text,
+            {ai_file_expr} AS output_file
+        FROM {video_table} v
+        {detail_join}
+        WHERE {where_sql}
+        {order_sql}
+        "#
+    );
 
     let mut stmt = conn
         .prepare(&sql)
@@ -1891,7 +2075,7 @@ pub fn redact_secrets(text: &str) -> String {
         break;
     }
 
-    out = redact_prefixed_token(&out, "AIza", 35, 45, "[redacted Google API key]");
+    out = redact_prefixed_token(&out, "AIza", 20, 60, "[redacted Google API key]");
     out = redact_prefixed_token(&out, "AKIA", 16, 24, "[redacted AWS access key]");
     out = redact_prefixed_token(&out, "ASIA", 16, 24, "[redacted AWS access key]");
     out = redact_prefixed_token(&out, "sk-", 16, 120, "[redacted API key]");

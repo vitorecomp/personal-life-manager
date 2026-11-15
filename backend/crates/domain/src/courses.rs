@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::todos::TaskPriority;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema, JsonSchema, sqlx::Type)]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum CourseProvider {
@@ -21,6 +21,27 @@ pub enum CourseProvider {
     University,
     FrontendMasters,
     Custom,
+}
+
+impl<'de> Deserialize<'de> for CourseProvider {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        let normalized = raw.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+        match normalized.as_str() {
+            "udemy" => Ok(Self::Udemy),
+            "coursera" => Ok(Self::Coursera),
+            "youtube" | "yt" => Ok(Self::Youtube),
+            "book" | "books" => Ok(Self::Book),
+            "certification" | "cert" => Ok(Self::Certification),
+            "university" | "uni" | "academic" => Ok(Self::University),
+            "frontend_masters" | "frontendmasters" => Ok(Self::FrontendMasters),
+            "custom" | "" => Ok(Self::Custom),
+            _ => Ok(Self::Custom),
+        }
+    }
 }
 
 impl Default for CourseProvider {
@@ -67,7 +88,14 @@ impl Default for LessonStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SpacedReviewAction {
-    #[serde(alias = "advance", alias = "good", alias = "easy", alias = "pass")]
+    #[serde(
+        alias = "advance",
+        alias = "graduate",
+        alias = "done",
+        alias = "good",
+        alias = "easy",
+        alias = "pass"
+    )]
     Complete,
     #[serde(alias = "postpone")]
     Snooze,
@@ -213,6 +241,8 @@ pub struct UpdateCourseLessonRequest {
     pub vault_note_path: Option<String>,
     pub key_summary_md: Option<String>,
     pub sort_order: Option<i32>,
+    pub review_stage: Option<i16>,
+    pub next_review_date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -308,6 +338,8 @@ pub struct SpawnCourseTodoRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct SpacedReviewDueItem {
+    pub id: Uuid,
+    pub lesson_id: Uuid,
     pub lesson: CourseLesson,
     pub course_title: String,
     pub interval_label: String,

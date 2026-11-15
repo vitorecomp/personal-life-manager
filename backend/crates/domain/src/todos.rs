@@ -383,6 +383,8 @@ pub struct QuickCaptureParseRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct QuickCaptureParsed {
+    #[serde(default)]
+    pub title: String,
     pub clean_title: String,
     pub tags: Vec<String>,
     pub energy_level: Option<TaskEnergyLevel>,

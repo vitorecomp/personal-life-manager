@@ -11,8 +11,31 @@ use uuid::Uuid;
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum SessionOrigin {
+    #[serde(
+        alias = "hermes_workspace",
+        alias = "hermes",
+        alias = "workspace",
+        alias = "web",
+        alias = "chat",
+        alias = "HermesView"
+    )]
     HermesView,
+    #[serde(
+        alias = "mobile_companion",
+        alias = "companion",
+        alias = "mobile",
+        alias = "frieren",
+        alias = "popover",
+        alias = "companion_popover",
+        alias = "FrierenPopover"
+    )]
     FrierenPopover,
+    #[serde(
+        alias = "knight",
+        alias = "agent",
+        alias = "agent_run",
+        alias = "KnightRun"
+    )]
     KnightRun,
 }
 
@@ -56,7 +79,16 @@ impl Default for ApprovalStatus {
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerContext {
-    #[serde(alias = "morning", alias = "evening", alias = "idle", alias = "default", alias = "general")]
+    #[serde(
+        alias = "morning",
+        alias = "evening",
+        alias = "evening_reflection",
+        alias = "morning_briefing",
+        alias = "focus_session",
+        alias = "idle",
+        alias = "default",
+        alias = "general"
+    )]
     Any,
     Tap,
     ScreenOpen,
@@ -435,6 +467,10 @@ pub struct DistillVaultRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 pub struct DistillVaultResponse {
     pub vault_note_path: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub file_path: String,
     pub title: String,
     pub created_at: DateTime<Utc>,
 }

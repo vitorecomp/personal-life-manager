@@ -34,6 +34,7 @@ impl LifeOpsService {
         let mut applied_count = 0usize;
         let mut conflicts_resolved = 0usize;
         let mut pending_events: Vec<SystemEvent> = Vec::new();
+        let mut checkin_dates_to_export: Vec<NaiveDate> = Vec::new();
 
         for mutation in &req.mutations {
             let mut_id_str = mutation.mutation_id.to_string();
@@ -135,8 +136,13 @@ impl LifeOpsService {
                     .await?;
                 }
                 "daily_checkins" => {
-                    let outcome =
-                        apply_daily_checkin_mutation(&mut tx, mutation, client_ts).await?;
+                    let outcome = apply_daily_checkin_mutation(
+                        &mut tx,
+                        mutation,
+                        client_ts,
+                        &mut checkin_dates_to_export,
+                    )
+                    .await?;
                     handle_outcome(
                         &mut tx,
                         outcome,
@@ -169,6 +175,10 @@ impl LifeOpsService {
 
         tx.commit().await?;
 
+        for log_date in checkin_dates_to_export {
+            let _ = self.export_daily_checkin_markdown_by_date(log_date).await;
+        }
+
         for ev in pending_events {
             self.emit_event(ev);
         }
@@ -188,11 +198,12 @@ impl LifeOpsService {
         if since < 0 {
             return Err(ApiError::bad_request("since must be >= 0"));
         }
-        let clamped_limit = if limit == 0 { 500 } else { limit.clamp(1, 2000) };
+        let clamped_limit = if limit == 0 { 5000 } else { limit.clamp(1, 10000) };
         let latest_server_seq = self.latest_server_seq().await?;
 
         if since == 0 {
             let mut changes = Vec::new();
+            let mut soft_deleted_changes = Vec::new();
             let mut seen_entities: HashSet<(String, String)> = HashSet::new();
 
             for &table in &MOBILE_SYNC_TABLES {
@@ -234,16 +245,23 @@ impl LifeOpsService {
                     };
 
                     seen_entities.insert((table.to_string(), entity_id.clone()));
-                    changes.push(SyncChangeEntry {
+                    let entry = SyncChangeEntry {
                         server_seq: latest_server_seq,
                         entity_table: table.to_string(),
                         entity_id,
                         op,
                         payload,
                         changed_at: deleted_at.unwrap_or(updated_at),
-                    });
+                    };
+                    if deleted_at.is_some() {
+                        soft_deleted_changes.push(entry);
+                    } else {
+                        changes.push(entry);
+                    }
                 }
             }
+
+            changes.extend(soft_deleted_changes);
 
             // Include any hard-deleted tombstones from sync_change_log not present in the tables
             let tombstone_rows = sqlx::query(
@@ -1237,12 +1255,15 @@ async fn apply_daily_checkin_mutation(
     tx: &mut Transaction<'_, Postgres>,
     mutation: &SyncMutationInput,
     client_ts: DateTime<Utc>,
+    checkin_dates_to_export: &mut Vec<NaiveDate>,
 ) -> Result<MutationOutcome, ApiError> {
-    let raw_date = if !mutation.entity_id.trim().is_empty() {
-        mutation.entity_id.trim()
-    } else if let Some(s) = json_str(&mutation.payload, "log_date") {
+    let raw_date = if let Some(s) = json_str(&mutation.payload, "log_date").filter(|s| !s.trim().is_empty()) {
         s.trim()
-    } else if let Some(s) = json_str(&mutation.payload, "id") {
+    } else if let Some(s) = json_str(&mutation.payload, "date").filter(|s| !s.trim().is_empty()) {
+        s.trim()
+    } else if !mutation.entity_id.trim().is_empty() {
+        mutation.entity_id.trim()
+    } else if let Some(s) = json_str(&mutation.payload, "id").filter(|s| !s.trim().is_empty()) {
         s.trim()
     } else {
         return Err(ApiError::bad_request(
@@ -1262,8 +1283,8 @@ async fn apply_daily_checkin_mutation(
             .fetch_optional(&mut **tx)
             .await?;
 
-    let energy_score = json_i32(&mutation.payload, "energy_score").map(|n| n as i16);
-    let mood_score = json_i32(&mutation.payload, "mood_score").map(|n| n as i16);
+    let energy_score = json_i32(&mutation.payload, "energy_score").map(|n| (n as i16).clamp(1, 5));
+    let mood_score = json_i32(&mutation.payload, "mood_score").map(|n| (n as i16).clamp(1, 5));
     let sleep_hours = json_decimal(&mutation.payload, "sleep_hours");
     let weekly_review_json = mutation.payload.get("weekly_review_json").cloned();
 
@@ -1306,6 +1327,7 @@ async fn apply_daily_checkin_mutation(
         .bind(client_ts)
         .execute(&mut **tx)
         .await?;
+        checkin_dates_to_export.push(log_date);
         return Ok(MutationOutcome::AppliedTriggerFired);
     }
 
@@ -1342,7 +1364,44 @@ async fn apply_daily_checkin_mutation(
     .execute(&mut **tx)
     .await?;
 
+    checkin_dates_to_export.push(log_date);
     Ok(MutationOutcome::AppliedTriggerFired)
+}
+
+fn normalize_phrase_trigger_context(raw: Option<&str>) -> Option<&'static str> {
+    let s = raw?.trim();
+    if s.is_empty() {
+        return Some("any");
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "any" => Some("any"),
+        "tap" => Some("tap"),
+        "screen_open" | "open" | "boot" => Some("screen_open"),
+        "todo_done" | "todo" | "task" | "task_completed" => Some("todo_done"),
+        "routine_done" | "routine" | "routine_streak" | "evening_reflection" | "evening"
+        | "morning" | "morning_briefing" => Some("routine_done"),
+        _ => Some("any"),
+    }
+}
+
+fn normalize_phrase_animation_hint(raw: Option<&str>) -> Option<&'static str> {
+    let s = raw?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "grimoire" | "read_grimoire" | "reading_grimoire" | "reading" => Some("grimoire"),
+        "stargazing" => Some("stargazing"),
+        "blue_flower_spell" | "cast_blue_flora" | "casting" | "celebrating" => {
+            Some("blue_flower_spell")
+        }
+        "tea" | "sip_tea" => Some("tea"),
+        "nod_off" | "cozy_nap" | "sleeping" => Some("nod_off"),
+        "mimic_gag" => Some("mimic_gag"),
+        "idle_gaze" | "idle_ledge_sit" | "calm_gaze" | "idle" => Some("idle_gaze"),
+        "wind_blink" | "wind_blink_loop" => Some("wind_blink"),
+        _ => Some("grimoire"),
+    }
 }
 
 async fn apply_companion_phrase_mutation(
@@ -1357,6 +1416,16 @@ async fn apply_companion_phrase_mutation(
     .bind(id)
     .fetch_optional(&mut **tx)
     .await?;
+
+    let phrase_text_opt = json_str(&mutation.payload, "phrase_text")
+        .or_else(|| json_str(&mutation.payload, "text_en"))
+        .or_else(|| json_str(&mutation.payload, "text"));
+    let trigger_context_opt =
+        normalize_phrase_trigger_context(json_str(&mutation.payload, "trigger_context"));
+    let animation_hint_opt =
+        normalize_phrase_animation_hint(json_str(&mutation.payload, "animation_hint"));
+    let active_opt = json_bool(&mutation.payload, "active")
+        .or_else(|| json_bool(&mutation.payload, "enabled"));
 
     if let Some(existing_ts) = existing {
         if client_ts < existing_ts {
@@ -1386,10 +1455,10 @@ async fn apply_companion_phrase_mutation(
              WHERE id = $1",
         )
         .bind(id)
-        .bind(json_str(&mutation.payload, "phrase_text"))
-        .bind(json_str(&mutation.payload, "trigger_context"))
-        .bind(json_str(&mutation.payload, "animation_hint"))
-        .bind(json_bool(&mutation.payload, "active"))
+        .bind(phrase_text_opt)
+        .bind(trigger_context_opt)
+        .bind(animation_hint_opt)
+        .bind(active_opt)
         .bind(client_ts)
         .execute(&mut **tx)
         .await?;
@@ -1407,12 +1476,11 @@ async fn apply_companion_phrase_mutation(
         .await;
     }
 
-    let phrase_text =
-        json_str(&mutation.payload, "phrase_text").unwrap_or("Consistency is reliable magic.");
-    let trigger_context = json_str(&mutation.payload, "trigger_context").unwrap_or("any");
-    let animation_hint = json_str(&mutation.payload, "animation_hint");
+    let phrase_text = phrase_text_opt.unwrap_or("Consistency is reliable magic.");
+    let trigger_context = trigger_context_opt.unwrap_or("any");
+    let animation_hint = animation_hint_opt;
     let is_builtin = json_bool(&mutation.payload, "is_builtin").unwrap_or(false);
-    let active = json_bool(&mutation.payload, "active").unwrap_or(true);
+    let active = active_opt.unwrap_or(true);
 
     sqlx::query(
         "INSERT INTO companion_offline_phrases ( \

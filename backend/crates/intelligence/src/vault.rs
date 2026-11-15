@@ -236,9 +236,15 @@ impl IntelligenceService {
             ));
         }
 
-        std::fs::create_dir_all(&self.second_brain_dir).map_err(|e| {
-            ApiError::internal(format!("Failed to initialize second_brain_dir: {e}"))
-        })?;
+        if !require_exists {
+            std::fs::create_dir_all(&self.second_brain_dir).map_err(|e| {
+                ApiError::internal(format!("Failed to initialize second_brain_dir: {e}"))
+            })?;
+        } else if !self.second_brain_dir.exists() {
+            return Err(ApiError::not_found(format!(
+                "Vault note '{normalized_rel}' not found"
+            )));
+        }
         let canonical_root = std::fs::canonicalize(&self.second_brain_dir).map_err(|e| {
             ApiError::internal(format!("Failed to canonicalize second_brain_dir: {e}"))
         })?;
@@ -591,6 +597,8 @@ impl IntelligenceService {
         let _ = self.index_vault_note(&normalized_rel, &rendered_md).await?;
 
         Ok(DistillVaultResponse {
+            path: normalized_rel.clone(),
+            file_path: normalized_rel.clone(),
             vault_note_path: normalized_rel,
             title: title.to_string(),
             created_at: now,

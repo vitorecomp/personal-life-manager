@@ -269,6 +269,11 @@ export function RoomMonitorView({
     return active.length > 0 ? active : decks.slice(0, 1);
   }, [decks]);
 
+  const kioskNavDecks = useMemo(
+    () => (rotationDecks.length > 1 ? rotationDecks : decks),
+    [rotationDecks, decks],
+  );
+
   const noDecksInRotation = useMemo(
     () => decks.length > 0 && decks.every((d) => d.in_rotation === false),
     [decks],
@@ -277,11 +282,11 @@ export function RoomMonitorView({
   const activeDeck: DashboardDeckRecord = useMemo(() => {
     if (kioskMode) {
       const safeIdx =
-        rotationDecks.length > 0
-          ? ((cycleState.rotationIndex % rotationDecks.length) + rotationDecks.length) %
-            rotationDecks.length
+        kioskNavDecks.length > 0
+          ? ((cycleState.rotationIndex % kioskNavDecks.length) + kioskNavDecks.length) %
+            kioskNavDecks.length
           : 0;
-      return rotationDecks[safeIdx] ?? decks[0] ?? FALLBACK_STARTER_DECKS[0]!;
+      return kioskNavDecks[safeIdx] ?? decks[0] ?? FALLBACK_STARTER_DECKS[0]!;
     }
     if (selectedDeckId) {
       const found = decks.find(
@@ -290,7 +295,7 @@ export function RoomMonitorView({
       if (found) return found;
     }
     return decks[0] ?? FALLBACK_STARTER_DECKS[0]!;
-  }, [kioskMode, rotationDecks, cycleState.rotationIndex, selectedDeckId, decks]);
+  }, [kioskMode, kioskNavDecks, cycleState.rotationIndex, selectedDeckId, decks]);
 
   useEffect(() => {
     setActiveDashboardId(activeDeck?.id && UUID_RE.test(activeDeck.id) ? activeDeck.id : null);
@@ -625,8 +630,8 @@ export function RoomMonitorView({
           e.preventDefault();
           setCycleState((prev) => ({
             rotationIndex:
-              rotationDecks.length > 0
-                ? (prev.rotationIndex + 1) % rotationDecks.length
+              kioskNavDecks.length > 0
+                ? (prev.rotationIndex + 1) % kioskNavDecks.length
                 : 0,
             elapsedMs: 0,
           }));
@@ -634,8 +639,8 @@ export function RoomMonitorView({
           e.preventDefault();
           setCycleState((prev) => ({
             rotationIndex:
-              rotationDecks.length > 0
-                ? (prev.rotationIndex - 1 + rotationDecks.length) % rotationDecks.length
+              kioskNavDecks.length > 0
+                ? (prev.rotationIndex - 1 + kioskNavDecks.length) % kioskNavDecks.length
                 : 0,
             elapsedMs: 0,
           }));

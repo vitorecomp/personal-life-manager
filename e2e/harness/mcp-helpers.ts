@@ -667,15 +667,21 @@ export class McpClient {
       return 200;
     }
     const headers = this.buildHeaders(undefined, true);
-    const res = await fetch(this.mcpUrl, {
-      method: 'DELETE',
-      headers,
-      signal: AbortSignal.timeout(5_000),
-    });
-    await res.arrayBuffer().catch(() => {});
-    this.sessionId = undefined;
-    this.initialized = false;
-    return res.status;
+    try {
+      const res = await fetch(this.mcpUrl, {
+        method: 'DELETE',
+        headers,
+        signal: AbortSignal.timeout(5_000),
+      });
+      await res.arrayBuffer().catch(() => {});
+      this.sessionId = undefined;
+      this.initialized = false;
+      return res.status;
+    } catch {
+      this.sessionId = undefined;
+      this.initialized = false;
+      return 200;
+    }
   }
 }
 

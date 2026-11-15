@@ -1254,6 +1254,33 @@ impl LifeOpsService {
 
         Ok(md)
     }
+
+    pub(crate) async fn export_daily_checkin_markdown_by_date(
+        &self,
+        log_date: NaiveDate,
+    ) -> Result<(), ApiError> {
+        let checkin = self.get_checkin(log_date).await?;
+        if checkin.deleted_at.is_some() {
+            return Ok(());
+        }
+        let daily_rel = format!("Daily/{log_date}.md");
+        let daily_abs = self.config.second_brain_dir.join(&daily_rel);
+        let daily_md = self.render_daily_checkin_markdown(&checkin).await?;
+        atomic_write_markdown(&daily_abs, &daily_md)?;
+
+        if let Some(ref wr_json) = checkin.weekly_review_json {
+            let iso = log_date.iso_week();
+            let iso_str = format!("{:04}-W{:02}", iso.year(), iso.week());
+            let review_rel = format!("Reviews/{iso_str}.md");
+            let review_abs = self.config.second_brain_dir.join(&review_rel);
+            let summary = self
+                .get_weekly_review_summary(Some(&log_date.to_string()))
+                .await?;
+            let review_md = render_weekly_review_markdown(&iso_str, &summary, wr_json);
+            atomic_write_markdown(&review_abs, &review_md)?;
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -1540,30 +1567,69 @@ fn parse_week_or_date_anchor(input: Option<&str>) -> Result<NaiveDate, ApiError>
     )))
 }
 
+fn extract_review_section_text(review_json: &serde_json::Value, keys: &[&str]) -> String {
+    for &key in keys {
+        if let Some(val) = review_json.get(key) {
+            if let Some(s) = val.as_str() {
+                if !s.trim().is_empty() {
+                    return s.trim().to_string();
+                }
+            } else if let Some(arr) = val.as_array() {
+                let items: Vec<String> = arr
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::trim))
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        if s.starts_with("- ") || s.starts_with("* ") {
+                            s.to_string()
+                        } else {
+                            format!("- {s}")
+                        }
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    return items.join("\n");
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 fn render_weekly_review_markdown(
     iso_week: &str,
     summary: &WeeklyReviewSummaryResponse,
     review_json: &serde_json::Value,
 ) -> String {
-    let wins = review_json
-        .get("wins")
-        .or_else(|| review_json.get("wins_md"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let challenges = review_json
-        .get("challenges")
-        .or_else(|| review_json.get("challenges_md"))
-        .or_else(|| review_json.get("blockers_md"))
-        .or_else(|| review_json.get("blockers"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let priorities = review_json
-        .get("next_week_priorities")
-        .or_else(|| review_json.get("next_steps_md"))
-        .or_else(|| review_json.get("adjustments_md"))
-        .or_else(|| review_json.get("adjustments"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let wins = extract_review_section_text(
+        review_json,
+        &["wins", "wins_md", "highlights", "highlights_md"],
+    );
+    let challenges = extract_review_section_text(
+        review_json,
+        &[
+            "challenges",
+            "challenges_md",
+            "blockers_md",
+            "blockers",
+            "friction_md",
+            "friction",
+        ],
+    );
+    let priorities = extract_review_section_text(
+        review_json,
+        &[
+            "next_week_priorities",
+            "next_priorities_md",
+            "next_priorities",
+            "priorities_md",
+            "priorities",
+            "next_steps_md",
+            "next_steps",
+            "adjustments_md",
+            "adjustments",
+        ],
+    );
 
     let mut md = String::new();
     md.push_str("---\n");
@@ -1656,11 +1722,33 @@ pub(crate) fn atomic_write_markdown(target_path: &Path, content: &str) -> Result
         })?;
     }
 
-    let preserved_keep = extract_existing_keep_blocks(target_path);
-    let final_content = if preserved_keep.is_empty() || content.contains(&preserved_keep) {
-        content.to_string()
+    let managed_start = "<!-- hermes:managed:start -->";
+    let managed_end = "<!-- hermes:managed:end -->";
+    let base_merged = if let Ok(existing) = std::fs::read_to_string(target_path) {
+        if let (Some(s_idx), Some(e_rel)) = (
+            existing.find(managed_start),
+            existing.find(managed_end),
+        ) && e_rel >= s_idx
+        {
+            let after_end = e_rel + managed_end.len();
+            let prefix = &existing[..s_idx];
+            let suffix = &existing[after_end..];
+            format!(
+                "{prefix}{managed_start}\n{}\n{managed_end}{suffix}",
+                content.trim()
+            )
+        } else {
+            content.to_string()
+        }
     } else {
-        format!("{}\n\n{}\n", content.trim_end(), preserved_keep)
+        content.to_string()
+    };
+
+    let preserved_keep = extract_existing_keep_blocks(target_path);
+    let final_content = if preserved_keep.is_empty() || base_merged.contains(&preserved_keep) {
+        base_merged
+    } else {
+        format!("{}\n\n{}\n", base_merged.trim_end(), preserved_keep)
     };
 
     let file_name = target_path

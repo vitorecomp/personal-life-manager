@@ -133,7 +133,7 @@ pub enum McpToolExecutionOutcome {
 
 impl McpToolExecutionOutcome {
     pub fn to_json_value(&self) -> Value {
-        match self {
+        let mut base = match self {
             Self::ExecutedRead {
                 tool_name,
                 autonomy_tier,
@@ -169,7 +169,24 @@ impl McpToolExecutionOutcome {
                 "payload_json": approval.payload_json,
                 "message": format!("Tool '{tool_name}' requires human operator approval before execution."),
             }),
+        };
+
+        let result_opt = match self {
+            Self::ExecutedRead { result, .. } | Self::ExecutedWithUndo { result, .. } => {
+                Some(result)
+            }
+            Self::PendingApproval { .. } => None,
+        };
+
+        if let (Some(Value::Object(res_map)), Some(base_map)) = (result_opt, base.as_object_mut()) {
+            for (k, v) in res_map {
+                if !base_map.contains_key(k) {
+                    base_map.insert(k.clone(), v.clone());
+                }
+            }
         }
+
+        base
     }
 }
 
@@ -327,10 +344,12 @@ pub fn mcp_tool_catalog() -> Vec<McpToolSpec> {
                     "widget_id": { "type": "string", "format": "uuid" },
                     "title": { "type": "string" },
                     "query": { "type": "string" },
+                    "sql_query": { "type": "string" },
+                    "sql": { "type": "string" },
                     "grid_rect": { "type": "object" },
                     "refresh_interval_seconds": { "type": "integer", "default": 60 }
                 },
-                "required": ["dashboard_id", "query"]
+                "required": ["dashboard_id"]
             }),
         },
         // ---------------------------------------------------------------------
@@ -1422,7 +1441,7 @@ impl IntelligenceService {
     ) -> Result<(), ApiError> {
         match tool_name {
             "dashboards_configure_sql_widget" => {
-                let query = parse_str_arg(args, &["query", "sql"])?;
+                let query = parse_str_arg(args, &["query", "sql_query", "sql", "statement"])?;
                 validate_custom_sql_query(query)?;
                 let _ = parse_uuid_arg(args, &["dashboard_id", "id"])?;
             }
@@ -1934,7 +1953,7 @@ impl IntelligenceService {
             }
             "dashboards_configure_sql_widget" => {
                 let dashboard_id = parse_uuid_arg(args, &["dashboard_id", "id"])?;
-                let query = parse_str_arg(args, &["query", "sql"])?;
+                let query = parse_str_arg(args, &["query", "sql_query", "sql", "statement"])?;
                 let validated_sql = validate_custom_sql_query(query)?;
                 let title = args
                     .get("title")

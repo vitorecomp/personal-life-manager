@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::mcp::{McpCallContext, McpToolExecutionOutcome};
 use crate::service::IntelligenceService;
 
-pub const GATEWAY_PROBE_TIMEOUT_MS: u64 = 1500;
+pub const GATEWAY_PROBE_TIMEOUT_MS: u64 = 350;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedChatContext {
@@ -57,10 +57,13 @@ impl IntelligenceService {
             if let Some(ref key) = self.gateway_api_key {
                 req = req.bearer_auth(key);
             }
-            if let Ok(resp) = req.send().await {
-                if resp.status().is_success() {
-                    return "online".to_string();
+            match req.send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        return "online".to_string();
+                    }
                 }
+                Err(_) => break,
             }
         }
 
@@ -536,6 +539,7 @@ impl IntelligenceService {
         let mut thinking_acc = String::new();
         let mut content_acc = String::new();
         let mut upstream_tool_directives: Vec<ChatToolCallDirective> = Vec::new();
+        let mut gateway_mcp_call: Option<serde_json::Value> = None;
 
         if let Some(ref explicit_tc) = req.tool_call {
             upstream_tool_directives.push(explicit_tc.clone());
@@ -558,6 +562,12 @@ impl IntelligenceService {
                 let Ok(val) = serde_json::from_str::<serde_json::Value>(data_trimmed) else {
                     continue;
                 };
+
+                if gateway_mcp_call.is_none() {
+                    if let Some(mc) = val.get("mcp_call").filter(|v| v.is_object()) {
+                        gateway_mcp_call = Some(mc.clone());
+                    }
+                }
 
                 if let Some(th) = val
                     .get("thinking")
@@ -628,6 +638,11 @@ impl IntelligenceService {
                 }
             }
         } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw_text) {
+            if gateway_mcp_call.is_none() {
+                if let Some(mc) = val.get("mcp_call").filter(|v| v.is_object()) {
+                    gateway_mcp_call = Some(mc.clone());
+                }
+            }
             if let Some(th) = val
                 .pointer("/choices/0/message/reasoning_content")
                 .or_else(|| val.get("thinking"))
@@ -715,6 +730,79 @@ impl IntelligenceService {
                 &mut approval_ids,
             )
             .await;
+        }
+
+        if let Some(mc) = gateway_mcp_call {
+            let tool_name = mc
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("mcp_tool")
+                .to_string();
+            let arguments = mc
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let undo_id = mc
+                .get("undo_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok());
+            let approval_id = mc
+                .get("approval_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok());
+            let result_val = mc.get("parsed").cloned();
+            let autonomy_tier = crate::mcp::classify_tool_autonomy(&tool_name, &arguments);
+            let status_str = if approval_id.is_some() {
+                "awaiting_approval"
+            } else if mc.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+                "error"
+            } else {
+                "executed"
+            };
+
+            events.push(HermesStreamEvent::ToolCall {
+                session_key: session.session_key.clone(),
+                tool_name: tool_name.clone(),
+                arguments: arguments.clone(),
+                autonomy_tier,
+                status: status_str.to_string(),
+                result: result_val.clone(),
+                undo_id,
+                approval_id,
+            });
+
+            if let Some(uid) = undo_id {
+                undo_ids.push(uid);
+                events.push(HermesStreamEvent::UndoAvailable {
+                    session_key: session.session_key.clone(),
+                    undo_id: uid,
+                    tool_name: tool_name.clone(),
+                    entity_table: None,
+                    entity_id: None,
+                    expires_at: Utc::now() + chrono::Duration::minutes(15),
+                });
+            }
+
+            if let Some(aid) = approval_id {
+                approval_ids.push(aid);
+                events.push(HermesStreamEvent::ApprovalRequired {
+                    session_key: session.session_key.clone(),
+                    approval_id: aid,
+                    tool_name: tool_name.clone(),
+                    payload_json: arguments.clone(),
+                    status: ApprovalStatus::Pending,
+                });
+            }
+
+            tool_calls_log.push(serde_json::json!({
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "autonomy_tier": autonomy_tier,
+                "status": status_str,
+                "result": result_val,
+                "undo_id": undo_id,
+                "approval_id": approval_id,
+            }));
         }
 
         if content_acc.trim().is_empty() {

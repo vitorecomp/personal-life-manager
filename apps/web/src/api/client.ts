@@ -692,6 +692,12 @@ export function parseQuickCaptureFallback(rawInput: string): QuickCaptureParsed 
   };
 }
 
+/** One parsed SSE frame of `POST /api/hermes/chat/stream`, with its resolved lower-case `type`. */
+export interface HermesStreamFrame {
+  type: string;
+  [field: string]: any;
+}
+
 export interface StreamChatCallbacks {
   onThinking?: (thinkingText: string) => void;
   onToken?: (delta: string) => void;
@@ -699,23 +705,63 @@ export interface StreamChatCallbacks {
   onUndoAvailable?: (undo: { undoId: string; toolName: string; summary: string }) => void;
   onApprovalRequired?: (approval: { id: string; toolName: string; summary?: string; payloadJson: any }) => void;
   onDone?: (fullText: string) => void;
+  /**
+   * Receives every JSON frame exactly as the server sent it (including `done` and event
+   * types this client does not know), before the typed callbacks above run.
+   */
+  onFrame?: (frame: HermesStreamFrame) => void;
+}
+
+export interface StreamHermesChatParams {
+  sessionKey: string;
+  message: string;
+  origin?: 'frieren_popover' | 'hermes_view' | 'knight_run';
+  highLevelMode?: boolean;
+  pageContext?: {
+    active_route: string;
+    active_dashboard_id?: string | null;
+    selected_entity_id?: string | null;
+  };
+  /** Domain scopes such as `@vault`, `@goals`; sent as `mentions`. */
+  mentions?: string[];
+  /** `/deep-plan`, `/weekly-review`, `/quiz-me`, …; sent as `slash_command`. */
+  slashCommand?: string | null;
+  /** Hermes profile / Knight profile; the backend only reads the key `profile_slug`. */
+  profileSlug?: string | null;
+  model?: string | null;
+  /** Explicit `/mcp` tool directive; sent as `tool_call`. */
+  toolCall?: { name: string; arguments?: unknown } | null;
+  /** Aborts the request and the stream read; the returned promise rejects with an `AbortError`. */
+  signal?: AbortSignal;
+  /** Extra request headers, e.g. `Authorization: Bearer plm_pat_…`. */
+  headers?: Record<string, string>;
+  /**
+   * When the stream carries no assistant text the legacy behaviour is to return a synthesized
+   * `[HERMES // READY] …` line. Pass `false` to get the empty string instead.
+   */
+  emptyReplyFallback?: boolean;
+}
+
+function createStreamAbortError(): Error {
+  if (typeof DOMException === 'function') {
+    return new DOMException('The Hermes chat stream was aborted.', 'AbortError');
+  }
+  const err = new Error('The Hermes chat stream was aborted.');
+  err.name = 'AbortError';
+  return err;
 }
 
 export async function streamHermesChat(
-  params: {
-    sessionKey: string;
-    message: string;
-    origin?: 'frieren_popover' | 'hermes_view' | 'knight_run';
-    highLevelMode?: boolean;
-    pageContext?: {
-      active_route: string;
-      active_dashboard_id?: string | null;
-      selected_entity_id?: string | null;
-    };
-  },
+  params: StreamHermesChatParams,
   callbacks: StreamChatCallbacks = {},
 ): Promise<string> {
+  if (params.signal?.aborted) {
+    throw createStreamAbortError();
+  }
   if (typeof globalThis.fetch !== 'function') {
+    if (params.emptyReplyFallback === false) {
+      throw new ApiError('Fetch unavailable', 503);
+    }
     const fallback = `[OFFLINE_MOCK] Tactical acknowledgement for: ${params.message}`;
     callbacks.onToken?.(fallback);
     callbacks.onDone?.(fallback);
@@ -733,23 +779,63 @@ export async function streamHermesChat(
       }
     : undefined;
 
-  const response = await globalThis.fetch('/api/hermes/chat/stream', {
+  const requestBody: Record<string, unknown> = {
+    session_key: params.sessionKey,
+    message: params.message,
+    origin: params.origin ?? 'frieren_popover',
+    high_level_mode: params.highLevelMode ?? false,
+    page_context: sanitizedPageContext,
+  };
+  if (params.mentions && params.mentions.length > 0) requestBody.mentions = params.mentions;
+  if (params.slashCommand) requestBody.slash_command = params.slashCommand;
+  if (params.profileSlug) requestBody.profile_slug = params.profileSlug;
+  if (params.model) requestBody.model = params.model;
+  if (params.toolCall?.name) {
+    requestBody.tool_call = {
+      name: params.toolCall.name,
+      arguments: params.toolCall.arguments ?? {},
+    };
+  }
+
+  const requestInit: RequestInit = {
     method: 'POST',
     headers: {
+      ...(params.headers ?? {}),
       'Content-Type': 'application/json',
       'X-Hermes-Session-Key': params.sessionKey,
     },
-    body: JSON.stringify({
-      session_key: params.sessionKey,
-      message: params.message,
-      origin: params.origin ?? 'frieren_popover',
-      high_level_mode: params.highLevelMode ?? false,
-      page_context: sanitizedPageContext,
-    }),
-  });
+    body: JSON.stringify(requestBody),
+  };
+  if (params.signal) requestInit.signal = params.signal;
+
+  const response = await globalThis.fetch('/api/hermes/chat/stream', requestInit);
 
   if (!response.ok) {
-    throw new ApiError(`Chat stream failed (${response.status})`, response.status);
+    // Failures are plain JSON error responses ({ error, message }); there is no `error` SSE event.
+    let errorBody: any = null;
+    try {
+      const rawError = await response.text();
+      if (rawError) {
+        try {
+          errorBody = JSON.parse(rawError);
+        } catch {
+          errorBody = rawError;
+        }
+      }
+    } catch {
+      errorBody = null;
+    }
+    const serverMessage =
+      errorBody && typeof errorBody === 'object'
+        ? errorBody.message || errorBody.detail || errorBody.error
+        : typeof errorBody === 'string' && errorBody.trim().length > 0
+          ? errorBody.trim().slice(0, 300)
+          : null;
+    throw new ApiError(
+      serverMessage ? String(serverMessage) : `Chat stream failed (${response.status})`,
+      response.status,
+      errorBody,
+    );
   }
 
   let accumulated = '';
@@ -791,6 +877,10 @@ export async function streamHermesChat(
 
     const evType = String(parsed?.type || currentEvent || 'message').toLowerCase();
     if (!trimmed && evType !== 'token') return;
+
+    if (callbacks.onFrame && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      callbacks.onFrame({ ...parsed, type: evType });
+    }
 
     if (evType === 'thinking') {
       callbacks.onThinking?.(
@@ -850,19 +940,33 @@ export async function streamHermesChat(
     const decoder = new TextDecoder('utf-8');
     let lineBuffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      fullRawCapture += chunk;
-      lineBuffer += chunk;
-      let newlineIdx = lineBuffer.indexOf('\n');
-      while (newlineIdx !== -1) {
-        const line = lineBuffer.slice(0, newlineIdx);
-        lineBuffer = lineBuffer.slice(newlineIdx + 1);
-        processLine(line);
-        newlineIdx = lineBuffer.indexOf('\n');
+    // Abort must interrupt a pending read even when the transport ignores the signal.
+    const cancelReader = () => {
+      reader.cancel().catch(() => undefined);
+    };
+    if (params.signal) {
+      if (params.signal.aborted) cancelReader();
+      else params.signal.addEventListener('abort', cancelReader, { once: true });
+    }
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (params.signal?.aborted) throw createStreamAbortError();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        fullRawCapture += chunk;
+        lineBuffer += chunk;
+        let newlineIdx = lineBuffer.indexOf('\n');
+        while (newlineIdx !== -1) {
+          const line = lineBuffer.slice(0, newlineIdx);
+          lineBuffer = lineBuffer.slice(newlineIdx + 1);
+          processLine(line);
+          newlineIdx = lineBuffer.indexOf('\n');
+        }
       }
+    } finally {
+      params.signal?.removeEventListener('abort', cancelReader);
     }
 
     const tail = decoder.decode();
@@ -891,7 +995,7 @@ export async function streamHermesChat(
     }
   }
 
-  if (!accumulated) {
+  if (!accumulated && params.emptyReplyFallback !== false) {
     accumulated = `[HERMES // READY] Processed "${params.message}" on ${params.pageContext?.active_route ?? '/dashboard'}.`;
   }
 

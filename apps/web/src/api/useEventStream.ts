@@ -41,6 +41,21 @@ export function useEventStream(): void {
       if (eventType.includes('mcp') || eventType.includes('approval') || eventType.includes('undo')) {
         queryClient.invalidateQueries({ queryKey: ['mcp-approvals'] });
         queryClient.invalidateQueries({ queryKey: ['mcp-undo'] });
+        queryClient.invalidateQueries({ queryKey: ['hermes-sessions'] });
+        queryClient.invalidateQueries({ queryKey: ['hermes-session'] });
+      }
+      if (eventType.includes('knight') || eventType.includes('agent')) {
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+        queryClient.invalidateQueries({ queryKey: ['hermes-sessions'] });
+        queryClient.invalidateQueries({ queryKey: ['hermes-sessions-sync'] });
+      }
+      if (eventType.includes('youtube') || eventType.includes('vault')) {
+        queryClient.invalidateQueries({ queryKey: ['vault-notes'] });
+        queryClient.invalidateQueries({ queryKey: ['courses'] });
+      }
+      if (eventType.includes('portfolio') || eventType.includes('goal')) {
+        queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+        queryClient.invalidateQueries({ queryKey: ['life-score'] });
       }
       if (eventType.includes('companion') || eventType.includes('nudge')) {
         queryClient.invalidateQueries({ queryKey: ['companion-nudges'] });
@@ -54,6 +69,10 @@ export function useEventStream(): void {
       'timer_updated',
       'task_mutated',
       'routine_logged',
+      'youtube_crawler_synced',
+      'portfolio_price_alert',
+      'goal_pace_at_risk',
+      'knight_run_updated',
       'mcp_approval_required',
       'mcp_undo_available',
       'companion_nudge',

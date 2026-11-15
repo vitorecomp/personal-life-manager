@@ -46,6 +46,9 @@ export function useEventStream(): void {
       }
       if (eventType.includes('knight') || eventType.includes('agent')) {
         queryClient.invalidateQueries({ queryKey: ['agents'] });
+        queryClient.invalidateQueries({ queryKey: ['agents-queue'] });
+        queryClient.invalidateQueries({ queryKey: ['agent-runs'] });
+        queryClient.invalidateQueries({ queryKey: ['agent-run-detail'] });
         queryClient.invalidateQueries({ queryKey: ['hermes-sessions'] });
         queryClient.invalidateQueries({ queryKey: ['hermes-sessions-sync'] });
       }
@@ -85,13 +88,26 @@ export function useEventStream(): void {
     for (const name of eventNames) {
       const fn = (e: MessageEvent) => {
         let parsedType = name;
+        let parsedData: Record<string, unknown> | null = null;
         if (e.data) {
           try {
             const data = JSON.parse(e.data);
-            if (data?.type) parsedType = String(data.type).toLowerCase();
+            if (data && typeof data === 'object') {
+              parsedData = data as Record<string, unknown>;
+              if (data.type) parsedType = String(data.type).toLowerCase();
+            }
           } catch {
             // Ignore non-JSON frame
           }
+        }
+        if (parsedType === 'knight_run_updated' && parsedData) {
+          queryClient.setQueryData(['knight-live-cast'], {
+            agent_id: parsedData.agent_id ? String(parsedData.agent_id) : undefined,
+            agent_slug: parsedData.agent_slug ? String(parsedData.agent_slug) : undefined,
+            run_id: parsedData.run_id ? String(parsedData.run_id) : undefined,
+            status: parsedData.status ? String(parsedData.status) : 'running',
+            receivedAt: Date.now(),
+          });
         }
         handleInvalidateAll(parsedType);
       };

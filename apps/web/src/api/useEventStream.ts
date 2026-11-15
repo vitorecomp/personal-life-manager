@@ -29,14 +29,32 @@ export function useEventStream(): void {
       if (eventType.includes('timer')) {
         queryClient.invalidateQueries({ queryKey: ['active-timer'] });
         queryClient.invalidateQueries({ queryKey: ['time-stats'] });
+        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        queryClient.invalidateQueries({ queryKey: ['tasks-capacity'] });
+        queryClient.invalidateQueries({ queryKey: ['tasks-flow'] });
+        queryClient.invalidateQueries({ queryKey: ['time-sessions'] });
+        queryClient.invalidateQueries({ queryKey: ['ideal-week'] });
+        queryClient.invalidateQueries({ queryKey: ['weekly-review'] });
       }
       if (eventType.includes('task')) {
         queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        queryClient.invalidateQueries({ queryKey: ['projects'] });
+        queryClient.invalidateQueries({ queryKey: ['tasks-flow'] });
+        queryClient.invalidateQueries({ queryKey: ['tasks-capacity'] });
+        queryClient.invalidateQueries({ queryKey: ['time-sessions'] });
+        queryClient.invalidateQueries({ queryKey: ['weekly-review'] });
+        queryClient.invalidateQueries({ queryKey: ['goals'] });
         queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+        queryClient.invalidateQueries({ queryKey: ['life-score'] });
       }
       if (eventType.includes('routine')) {
         queryClient.invalidateQueries({ queryKey: ['routines'] });
         queryClient.invalidateQueries({ queryKey: ['routines-analytics'] });
+        queryClient.invalidateQueries({ queryKey: ['ideal-week'] });
+        queryClient.invalidateQueries({ queryKey: ['daily-checkin'] });
+        queryClient.invalidateQueries({ queryKey: ['weekly-review'] });
+        queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+        queryClient.invalidateQueries({ queryKey: ['life-score'] });
       }
       if (eventType.includes('mcp') || eventType.includes('approval') || eventType.includes('undo')) {
         queryClient.invalidateQueries({ queryKey: ['mcp-approvals'] });

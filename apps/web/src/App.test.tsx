@@ -1300,7 +1300,7 @@ describe('HERMES // OS Web SPA — Sub-Milestone M4A (F23, F24, F27)', () => {
     await waitFor(() => {
       expect(candleUrls.length).toBeGreaterThan(0);
     });
-    expect(candleUrls).toContain(`/api/finance/assets/${assetUuid}/candles`);
+    expect(candleUrls).toContain(`/api/finance/assets/${assetUuid}/candles?range=1M`);
     expect(candleUrls.some((u) => u.includes('/WEGE3/candles'))).toBe(false);
     expect(document.body.textContent).toContain('WEGE3');
   });

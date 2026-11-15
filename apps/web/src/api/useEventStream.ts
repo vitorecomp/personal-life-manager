@@ -70,13 +70,47 @@ export function useEventStream(): void {
         queryClient.invalidateQueries({ queryKey: ['hermes-sessions'] });
         queryClient.invalidateQueries({ queryKey: ['hermes-sessions-sync'] });
       }
-      if (eventType.includes('youtube') || eventType.includes('vault')) {
+      if (
+        eventType.includes('youtube') ||
+        eventType.includes('vault') ||
+        eventType.includes('course') ||
+        eventType.includes('review')
+      ) {
         queryClient.invalidateQueries({ queryKey: ['vault-notes'] });
         queryClient.invalidateQueries({ queryKey: ['courses'] });
-      }
-      if (eventType.includes('portfolio') || eventType.includes('goal')) {
+        queryClient.invalidateQueries({ queryKey: ['courses-youtube'] });
+        queryClient.invalidateQueries({ queryKey: ['courses-spaced-reviews'] });
+        queryClient.invalidateQueries({ queryKey: ['course-detail'] });
+        queryClient.invalidateQueries({ queryKey: ['goals'] });
+        queryClient.invalidateQueries({ queryKey: ['goals-blueprint'] });
         queryClient.invalidateQueries({ queryKey: ['dashboards'] });
         queryClient.invalidateQueries({ queryKey: ['life-score'] });
+      }
+      if (
+        eventType.includes('portfolio') ||
+        eventType.includes('finance') ||
+        eventType.includes('quote') ||
+        eventType.includes('asset')
+      ) {
+        queryClient.invalidateQueries({ queryKey: ['finance-assets'] });
+        queryClient.invalidateQueries({ queryKey: ['finance-allocation'] });
+        queryClient.invalidateQueries({ queryKey: ['finance-retirement'] });
+        queryClient.invalidateQueries({ queryKey: ['finance-monthly-plans'] });
+        queryClient.invalidateQueries({ queryKey: ['finance-candles'] });
+        queryClient.invalidateQueries({ queryKey: ['finance-snapshots'] });
+        queryClient.invalidateQueries({ queryKey: ['goals'] });
+        queryClient.invalidateQueries({ queryKey: ['goals-blueprint'] });
+        queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+        queryClient.invalidateQueries({ queryKey: ['life-score'] });
+        queryClient.invalidateQueries({ queryKey: ['companion-nudges'] });
+      }
+      if (eventType.includes('goal') || eventType.includes('okr') || eventType.includes('cycle')) {
+        queryClient.invalidateQueries({ queryKey: ['goals'] });
+        queryClient.invalidateQueries({ queryKey: ['goals-blueprint'] });
+        queryClient.invalidateQueries({ queryKey: ['goals-cycles'] });
+        queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+        queryClient.invalidateQueries({ queryKey: ['life-score'] });
+        queryClient.invalidateQueries({ queryKey: ['companion-nudges'] });
       }
       if (eventType.includes('companion') || eventType.includes('nudge')) {
         queryClient.invalidateQueries({ queryKey: ['companion-nudges'] });

@@ -1,7 +1,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { E2E_PATHS, E2E_URLS } from './env';
+import {
+  E2E_PATHS,
+  E2E_URLS,
+  VAULT_OWNERSHIP_MARKER_FILE,
+  assertSafeE2eDataPath,
+  getVaultOwnershipInfo,
+  registerHarnessOwnedVaultRoot,
+} from './env';
 
 export interface ApiResponse<T = any> {
   status: number;
@@ -558,25 +566,102 @@ export class CleanupRegistry {
   }
 }
 
-export function snapshotSecondBrainFiles(rootDir: string = E2E_PATHS.secondBrainDir): Set<string> {
-  const snapshot = new Set<string>();
+const SNAPSHOT_EXISTING_DIRS = new WeakMap<
+  Set<string>,
+  { rootRealPath: string; dirs: Set<string> }
+>();
+
+export function assertSafeCleanupRoot(
+  rootDir: string,
+  callerLabel: string,
+  allowAutoRegisterHarnessPrefix = false,
+): { realRoot: string; initialDirs: Set<string> } {
+  assertSafeE2eDataPath(rootDir, callerLabel, { requireInsideTmp: true });
+
   if (!fs.existsSync(rootDir)) {
-    return snapshot;
+    throw new Error(
+      `[E2E-SAFETY-GUARD] R4: Cleanup root does not exist: "${rootDir}".`,
+    );
   }
+
+  if (fs.lstatSync(rootDir).isSymbolicLink()) {
+    throw new Error(
+      `[E2E-SAFETY-GUARD] R4: Refusing symlinked cleanup root: "${rootDir}".`,
+    );
+  }
+
+  const realRoot = fs.realpathSync(rootDir);
+  const realTmp = fs.realpathSync(os.tmpdir());
+  if (!realRoot.startsWith(realTmp + path.sep) || realRoot === realTmp) {
+    throw new Error(
+      `[E2E-SAFETY-GUARD] R4: Cleanup root "${rootDir}" (resolved to "${realRoot}") must reside inside a subdirectory of os.tmpdir() ("${realTmp}").`,
+    );
+  }
+
+  if (
+    fs.existsSync(path.join(realRoot, '.git')) ||
+    fs.existsSync(path.join(realRoot, '.obsidian'))
+  ) {
+    throw new Error(
+      `[E2E-SAFETY-GUARD] R4: Refusing cleanup root containing .git or .obsidian: "${realRoot}".`,
+    );
+  }
+
+  const ownership = getVaultOwnershipInfo(realRoot);
+  if (ownership.owned) {
+    return { realRoot, initialDirs: ownership.initialDirs };
+  }
+
+  const baseName = path.basename(realRoot);
+  if (
+    allowAutoRegisterHarnessPrefix &&
+    (baseName.startsWith('hermes-e2e-sbtest-') ||
+      baseName.startsWith('hermes-e2e-vault-'))
+  ) {
+    registerHarnessOwnedVaultRoot(realRoot);
+    const registered = getVaultOwnershipInfo(realRoot);
+    return { realRoot, initialDirs: registered.initialDirs };
+  }
+
+  throw new Error(
+    `[E2E-SAFETY-GUARD] R4: Refusing unowned cleanup root "${rootDir}" (resolved to "${realRoot}"); cleanup is confined to vault roots created by the harness for this run.`,
+  );
+}
+
+export function snapshotSecondBrainFiles(rootDir: string = E2E_PATHS.secondBrainDir): Set<string> {
+  const { realRoot, initialDirs } = assertSafeCleanupRoot(
+    rootDir,
+    'snapshotSecondBrainFiles',
+    true,
+  );
+  const snapshot = new Set<string>();
+  const existingDirs = new Set<string>(initialDirs);
 
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === '.git' || entry.name === '.obsidian') {
+        throw new Error(
+          `[E2E-SAFETY-GUARD] R4: Refusing to snapshot directory containing ${entry.name}: "${dir}".`,
+        );
+      }
+      if (entry.name === VAULT_OWNERSHIP_MARKER_FILE) {
+        continue;
+      }
       const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
+      const relPosix = path.relative(realRoot, fullPath).split(path.sep).join('/');
+      if (entry.isSymbolicLink()) {
+        snapshot.add(relPosix);
+      } else if (entry.isDirectory()) {
+        existingDirs.add(relPosix);
         walk(fullPath);
       } else {
-        const relPosix = path.relative(rootDir, fullPath).split(path.sep).join('/');
         snapshot.add(relPosix);
       }
     }
   };
 
-  walk(rootDir);
+  walk(realRoot);
+  SNAPSHOT_EXISTING_DIRS.set(snapshot, { rootRealPath: realRoot, dirs: existingDirs });
   return snapshot;
 }
 
@@ -584,25 +669,62 @@ export function cleanupNewSecondBrainFiles(
   before: Set<string>,
   rootDir: string = E2E_PATHS.secondBrainDir,
 ): void {
-  if (!fs.existsSync(rootDir)) {
-    return;
+  const { realRoot, initialDirs } = assertSafeCleanupRoot(
+    rootDir,
+    'cleanupNewSecondBrainFiles',
+    false,
+  );
+  const meta = SNAPSHOT_EXISTING_DIRS.get(before);
+  if (meta && meta.rootRealPath !== realRoot) {
+    throw new Error(
+      `[E2E-SAFETY-GUARD] R4: cleanupNewSecondBrainFiles rootDir "${realRoot}" does not match snapshot rootDir "${meta.rootRealPath}".`,
+    );
   }
 
   const walkPostOrder = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === '.git' || entry.name === '.obsidian') {
+        throw new Error(
+          `[E2E-SAFETY-GUARD] R4: Refusing to clean directory containing ${entry.name}: "${dir}".`,
+        );
+      }
+      if (entry.name === '.gitkeep' || entry.name === VAULT_OWNERSHIP_MARKER_FILE) {
+        continue;
+      }
       const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walkPostOrder(fullPath);
-        try {
-          if (fs.readdirSync(fullPath).length === 0) {
-            fs.rmdirSync(fullPath);
+      const relPosix = path.relative(realRoot, fullPath).split(path.sep).join('/');
+
+      if (entry.isSymbolicLink()) {
+        if (!before.has(relPosix) && !before.has(fullPath)) {
+          try {
+            fs.unlinkSync(fullPath);
+          } catch {
+            // Ignore if already removed
           }
-        } catch {
-          // Ignore non-empty or concurrent directory cleanup
+        }
+      } else if (entry.isDirectory()) {
+        walkPostOrder(fullPath);
+        const existedBefore =
+          (meta ? meta.dirs.has(relPosix) : true) ||
+          initialDirs.has(relPosix) ||
+          before.has(relPosix) ||
+          before.has(`${relPosix}/`) ||
+          before.has(`__dir__:${relPosix}`) ||
+          Array.from(before).some((p) => p.startsWith(`${relPosix}/`));
+
+        if (!existedBefore) {
+          try {
+            const remaining = fs
+              .readdirSync(fullPath)
+              .filter((name) => name !== VAULT_OWNERSHIP_MARKER_FILE);
+            if (remaining.length === 0) {
+              fs.rmdirSync(fullPath);
+            }
+          } catch {
+            // Ignore non-empty or concurrent directory cleanup
+          }
         }
       } else {
-        if (entry.name === '.gitkeep') continue;
-        const relPosix = path.relative(rootDir, fullPath).split(path.sep).join('/');
         if (!before.has(relPosix) && !before.has(fullPath)) {
           try {
             fs.unlinkSync(fullPath);
@@ -614,5 +736,5 @@ export function cleanupNewSecondBrainFiles(
     }
   };
 
-  walkPostOrder(rootDir);
+  walkPostOrder(realRoot);
 }

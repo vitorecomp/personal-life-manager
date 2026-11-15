@@ -18,16 +18,393 @@ const ALL_FEATURES = Array.from(
 );
 const VALID_FEATURE_SET = new Set(ALL_FEATURES);
 
+const PRIMARY_PROTECTED_DATA_ROOT = path.join(repoRoot, 'data');
+const VAULT_OWNERSHIP_MARKER_FILE = '.hermes-e2e-vault-root';
+
+function isInsideOrEqual(childPath, parentPath) {
+  const c = path.resolve(childPath);
+  const p = path.resolve(parentPath);
+  if (p === path.sep) return true;
+  return c === p || c.startsWith(p + path.sep);
+}
+
+function lstatIsSymlink(targetPath) {
+  try {
+    return fs.lstatSync(targetPath).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function canonicalizeWithMissingLeaf(absPath, depth = 0) {
+  const lexical = path.resolve(absPath);
+  if (isInsideOrEqual(lexical, PRIMARY_PROTECTED_DATA_ROOT)) {
+    return lexical;
+  }
+  if (depth > 16) {
+    return lexical;
+  }
+
+  const tailSegments = [];
+  let cur = lexical;
+  while (true) {
+    if (isInsideOrEqual(cur, PRIMARY_PROTECTED_DATA_ROOT)) {
+      return path.resolve(cur, ...tailSegments);
+    }
+    if (fs.existsSync(cur) || lstatIsSymlink(cur)) {
+      break;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) {
+      break;
+    }
+    tailSegments.unshift(path.basename(cur));
+    cur = parent;
+  }
+
+  let realBase = cur;
+  if (!isInsideOrEqual(cur, PRIMARY_PROTECTED_DATA_ROOT)) {
+    if (fs.existsSync(cur)) {
+      try {
+        realBase = fs.realpathSync(cur);
+      } catch {
+        realBase = cur;
+      }
+    } else if (lstatIsSymlink(cur)) {
+      try {
+        const linkTarget = fs.readlinkSync(cur);
+        const resolvedTarget = path.resolve(path.dirname(cur), linkTarget);
+        realBase = canonicalizeWithMissingLeaf(resolvedTarget, depth + 1);
+      } catch {
+        realBase = cur;
+      }
+    }
+  }
+
+  return path.resolve(realBase, ...tailSegments);
+}
+
+function getProtectedDataRoots(extraRoots = []) {
+  const roots = new Set([PRIMARY_PROTECTED_DATA_ROOT]);
+  const rawEnv = [
+    process.env.E2E_PROTECTED_DATA_ROOTS || '',
+    process.env.E2E_EXTRA_PROTECTED_DATA_ROOTS || '',
+  ]
+    .filter(Boolean)
+    .join(path.delimiter);
+
+  const candidates = [
+    ...rawEnv
+      .split(new RegExp(`[${path.delimiter},]`))
+      .map((s) => s.trim())
+      .filter(Boolean),
+    ...extraRoots.map((s) => String(s).trim()).filter(Boolean),
+  ];
+
+  for (const cand of candidates) {
+    const lex = path.resolve(cand);
+    roots.add(lex);
+    if (!isInsideOrEqual(lex, PRIMARY_PROTECTED_DATA_ROOT)) {
+      roots.add(canonicalizeWithMissingLeaf(lex));
+    }
+  }
+
+  return Array.from(roots);
+}
+
+function assertSafeE2eDataPath(rawPath, label = 'path', options = {}) {
+  if (typeof rawPath !== 'string' || rawPath.trim().length === 0) {
+    throw new Error(
+      `[E2E-SAFETY-GUARD] R2: Refusing empty or non-string path for ${label}.`,
+    );
+  }
+
+  const trimmed = rawPath.trim();
+  const candidateBases = path.isAbsolute(trimmed)
+    ? [path.resolve(trimmed)]
+    : [
+        path.resolve(process.cwd(), trimmed),
+        path.resolve(repoRoot, trimmed),
+        path.resolve(e2eRoot, trimmed),
+        path.resolve(repoRoot, 'backend', trimmed),
+      ];
+
+  const protectedRoots = getProtectedDataRoots(options.extraProtectedRoots || []);
+  const lexTmp = path.resolve(os.tmpdir());
+  const realTmp = canonicalizeWithMissingLeaf(lexTmp);
+
+  for (const cand of candidateBases) {
+    const candLex = path.resolve(cand);
+    const candReal = canonicalizeWithMissingLeaf(candLex);
+
+    if (
+      candLex === lexTmp ||
+      candLex === realTmp ||
+      candReal === lexTmp ||
+      candReal === realTmp
+    ) {
+      throw new Error(
+        `[E2E-SAFETY-GUARD] R2: Refusing bare os.tmpdir() root "${rawPath}" for ${label}; a dedicated temporary subdirectory is required.`,
+      );
+    }
+
+    for (const protRoot of protectedRoots) {
+      if (isInsideOrEqual(candLex, protRoot) || isInsideOrEqual(candReal, protRoot)) {
+        throw new Error(
+          `[E2E-SAFETY-GUARD] R2: Refusing unsafe path for ${label}: "${rawPath}" resolves to "${candReal}" which is inside protected data root "${protRoot}".`,
+        );
+      }
+      if (isInsideOrEqual(protRoot, candLex) || isInsideOrEqual(protRoot, candReal)) {
+        throw new Error(
+          `[E2E-SAFETY-GUARD] R2: Refusing unsafe ancestor path for ${label}: "${rawPath}" resolves to "${candReal}" which overlaps protected data root "${protRoot}".`,
+        );
+      }
+    }
+  }
+
+  const primaryLex = path.resolve(trimmed);
+  const primaryReal = canonicalizeWithMissingLeaf(primaryLex);
+
+  if (options.requireInsideTmp) {
+    const insideRealTmp =
+      primaryReal.startsWith(realTmp + path.sep) && primaryReal !== realTmp;
+    const insideLexTmp =
+      primaryLex.startsWith(lexTmp + path.sep) && primaryLex !== lexTmp;
+    if (!insideRealTmp && !insideLexTmp) {
+      throw new Error(
+        `[E2E-SAFETY-GUARD] R2/R4: Refusing path outside os.tmpdir() for ${label}: "${rawPath}" (resolved to "${primaryReal}").`,
+      );
+    }
+  }
+
+  return primaryReal;
+}
+
+function isSafeE2eDataPath(rawPath, options = {}) {
+  try {
+    assertSafeE2eDataPath(rawPath, 'check', options);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stampVaultOwnershipMarker(vaultDir) {
+  const safePath = assertSafeE2eDataPath(vaultDir, 'vaultDir', { requireInsideTmp: true });
+  fs.mkdirSync(safePath, { recursive: true });
+  const realRoot = fs.realpathSync(safePath);
+  if (
+    fs.existsSync(path.join(realRoot, '.git')) ||
+    fs.existsSync(path.join(realRoot, '.obsidian'))
+  ) {
+    throw new Error(
+      `[E2E-SAFETY-GUARD] R4: Refusing vault root containing .git or .obsidian: "${realRoot}".`,
+    );
+  }
+  const markerPath = path.join(realRoot, VAULT_OWNERSHIP_MARKER_FILE);
+  if (!fs.existsSync(markerPath)) {
+    const initialDirs = [];
+    const walkDirs = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === VAULT_OWNERSHIP_MARKER_FILE || entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) {
+          const full = path.join(dir, entry.name);
+          initialDirs.push(path.relative(realRoot, full).split(path.sep).join('/'));
+          walkDirs(full);
+        }
+      }
+    };
+    walkDirs(realRoot);
+    fs.writeFileSync(
+      markerPath,
+      JSON.stringify(
+        {
+          createdBy: 'hermes-e2e-harness',
+          rootRealPath: realRoot,
+          runToken: process.env.E2E_RUN_TOKEN || '',
+          initialDirs,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  }
+  return realRoot;
+}
+
+let runnerFixtureExitRegistered = false;
+
+function ensureRunnerFixtureAndSafetyEnv(opts) {
+  const isStaticMode = Boolean(opts.list || opts.dryCheck || opts.help);
+  if (isStaticMode) {
+    process.env.E2E_STATIC_MODE = '1';
+  }
+
+  if (!process.env.E2E_RUN_TOKEN) {
+    process.env.E2E_RUN_TOKEN = crypto.randomUUID();
+  }
+
+  // R2: Hard guard on any explicit E2E_* override before starting or contacting anything
+  for (const explicitVar of [
+    'E2E_SECOND_BRAIN_DIR',
+    'E2E_YOUTUBE_LISTS_DB',
+    'E2E_YOUTUBE_LISTS_NOTES_DIR',
+  ]) {
+    if (process.env[explicitVar] !== undefined) {
+      assertSafeE2eDataPath(process.env[explicitVar], explicitVar);
+    }
+  }
+
+  let fixtureRoot = process.env.E2E_RUN_FIXTURE_ROOT;
+  if (fixtureRoot !== undefined) {
+    fixtureRoot = assertSafeE2eDataPath(fixtureRoot, 'E2E_RUN_FIXTURE_ROOT', {
+      requireInsideTmp: true,
+    });
+  } else if (isStaticMode) {
+    fixtureRoot = path.join(os.tmpdir(), `hermes-e2e-static-${process.pid}`);
+    process.env.E2E_RUN_FIXTURE_ROOT = fixtureRoot;
+  } else {
+    fixtureRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), `hermes-e2e-run-${process.pid}-`),
+    );
+    process.env.E2E_RUN_FIXTURE_ROOT = fixtureRoot;
+    process.env.E2E_RUN_FIXTURE_OWNER_PID = String(process.pid);
+  }
+
+  if (!isStaticMode) {
+    const defaultVault = path.join(fixtureRoot, 'vault');
+    const defaultNotes = path.join(fixtureRoot, 'yt-notes');
+    fs.mkdirSync(defaultVault, { recursive: true });
+    fs.mkdirSync(defaultNotes, { recursive: true });
+    stampVaultOwnershipMarker(defaultVault);
+
+    if (
+      !runnerFixtureExitRegistered &&
+      process.env.E2E_RUN_FIXTURE_OWNER_PID === String(process.pid)
+    ) {
+      runnerFixtureExitRegistered = true;
+      const rootToClean = fixtureRoot;
+      process.once('exit', () => {
+        try {
+          const srvFile = path.join(rootToClean, 'managed-server.json');
+          if (fs.existsSync(srvFile)) {
+            const srvInfo = JSON.parse(fs.readFileSync(srvFile, 'utf8'));
+            if (typeof srvInfo?.pid === 'number' && srvInfo.pid > 1) {
+              try {
+                process.kill(srvInfo.pid, 'SIGTERM');
+              } catch {
+                // Ignore if already dead
+              }
+            }
+          }
+        } catch {
+          // Ignore
+        }
+        try {
+          fs.rmSync(rootToClean, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
+      });
+    }
+  }
+
+  const resolvePair = (e2eVar, plainVar, defaultSubpath, isVault = false) => {
+    if (process.env[e2eVar] !== undefined) {
+      const validated = assertSafeE2eDataPath(process.env[e2eVar], e2eVar);
+      if (isVault && !isStaticMode && isSafeE2eDataPath(validated, { requireInsideTmp: true })) {
+        stampVaultOwnershipMarker(validated);
+      }
+      return validated;
+    }
+    const plainVal = process.env[plainVar];
+    if (
+      typeof plainVal === 'string' &&
+      plainVal.trim().length > 0 &&
+      isSafeE2eDataPath(plainVal, { requireInsideTmp: true })
+    ) {
+      const validatedPlain = assertSafeE2eDataPath(plainVal, plainVar, {
+        requireInsideTmp: true,
+      });
+      if (isVault && !isStaticMode) {
+        stampVaultOwnershipMarker(validatedPlain);
+      }
+      return validatedPlain;
+    }
+    const fallback = assertSafeE2eDataPath(
+      path.join(fixtureRoot, defaultSubpath),
+      `${e2eVar}(default)`,
+      { requireInsideTmp: true },
+    );
+    if (isVault && !isStaticMode) {
+      stampVaultOwnershipMarker(fallback);
+    }
+    return fallback;
+  };
+
+  const resolvedSecondBrain = resolvePair(
+    'E2E_SECOND_BRAIN_DIR',
+    'SECOND_BRAIN_DIR',
+    'vault',
+    true,
+  );
+  const resolvedYoutubeDb = resolvePair(
+    'E2E_YOUTUBE_LISTS_DB',
+    'YOUTUBE_LISTS_DB',
+    'youtube-lists.sqlite',
+    false,
+  );
+  const resolvedYoutubeNotes = resolvePair(
+    'E2E_YOUTUBE_LISTS_NOTES_DIR',
+    'YOUTUBE_LISTS_NOTES_DIR',
+    'yt-notes',
+    false,
+  );
+
+  // Sanitize plain caller env vars in process.env so child processes never inherit unsafe data/ paths
+  process.env.SECOND_BRAIN_DIR = resolvedSecondBrain;
+  process.env.YOUTUBE_LISTS_DB = resolvedYoutubeDb;
+  process.env.YOUTUBE_LISTS_NOTES_DIR = resolvedYoutubeNotes;
+
+  return {
+    fixtureRoot,
+    secondBrainDir: resolvedSecondBrain,
+    youtubeListsDb: resolvedYoutubeDb,
+    youtubeListsNotesDir: resolvedYoutubeNotes,
+    baseUrl: (process.env.E2E_BASE_URL || 'http://127.0.0.1:8080').replace(/\/+$/, ''),
+    mobileUrl: (process.env.E2E_MOBILE_URL || 'http://127.0.0.1:4174').replace(/\/+$/, ''),
+  };
+}
+
+function printResolvedEnvBanner(envInfo) {
+  console.log(
+    `[run-e2e] Resolved Harness Environment:\n` +
+      `  E2E_RUN_FIXTURE_ROOT    = ${envInfo.fixtureRoot}\n` +
+      `  SECOND_BRAIN_DIR        = ${envInfo.secondBrainDir}\n` +
+      `  YOUTUBE_LISTS_DB        = ${envInfo.youtubeListsDb}\n` +
+      `  YOUTUBE_LISTS_NOTES_DIR = ${envInfo.youtubeListsNotesDir}\n` +
+      `  E2E_BASE_URL            = ${envInfo.baseUrl}\n` +
+      `  E2E_MOBILE_URL          = ${envInfo.mobileUrl}`,
+  );
+}
+
 function printUsage() {
   console.log(`Usage: node e2e/run-e2e.mjs [options]
 
 Options:
   (no flags)                  Run full 4-tier suite sequentially (tier1 -> tier2 -> tier3 -> tier4)
   --tier <1|2|3|4>            Restrict execution or discovery to a single tier
+  --scope <pattern[,...]>     Scope execution, --list, or --dry-check to matching .spec.ts files or @Fxx tags
+  --file <pattern[,...]>      Alias for --scope (restrict to matching .spec.ts files)
+  --feature <Fxx[,Fyy...]>    Run/list only tests tagged with @F01..@F36 (safe against describe-title over-match)
+  --test-id <ID[,ID...]>      Run/list only tests with bracketed IDs (e.g. T3-08,S12)
+  --grep, -g <regex>          Filter tests by title/tag regular expression
+  --expect-count <N>          Require pre-flight discovery count to equal N before running
+  --print-env                 Print resolved harness fixture paths and exit 0
   --list                      List discovered Playwright specs without starting servers
   --allow-empty               Allow --list to exit 0 when 0 tests are discovered
   --dry-check                 Validate TypeScript (--noEmit), test tags, skip bans & coverage matrix
-  --scope <glob_or_prefix>    Scope --dry-check to matching .spec.ts files (concurrent-safe)
   --self-test                 Run comprehensive isolated self-tests for CLI & all harness modules
   --help, -h                  Show this help message`);
 }
@@ -39,9 +416,16 @@ function parseCliArgs(argv) {
     allowEmpty: false,
     dryCheck: false,
     scope: null,
+    features: [],
+    testIds: [],
+    grep: null,
+    expectCount: null,
+    printEnv: false,
     selfTest: false,
     help: false,
   };
+
+  const scopeParts = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -55,25 +439,110 @@ function parseCliArgs(argv) {
       opts.dryCheck = true;
     } else if (arg === '--self-test') {
       opts.selfTest = true;
+    } else if (arg === '--print-env') {
+      opts.printEnv = true;
     } else if (arg === '--tier' || arg.startsWith('--tier=')) {
       const val = arg === '--tier' ? argv[++i] : arg.slice('--tier='.length);
       if (!val || !/^[1-4]$/.test(val)) {
         console.error(`[run-e2e] Invalid --tier value "${val ?? ''}". Expected 1, 2, 3, or 4.`);
-        process.exit(2);
+        process.exit(1);
       }
       opts.tier = Number(val);
-    } else if (arg === '--scope' || arg.startsWith('--scope=')) {
-      const val = arg === '--scope' ? argv[++i] : arg.slice('--scope='.length);
-      if (!val || val.startsWith('--')) {
-        console.error(`[run-e2e] Missing pattern after --scope.`);
-        process.exit(2);
+    } else if (
+      arg === '--scope' ||
+      arg.startsWith('--scope=') ||
+      arg === '--file' ||
+      arg.startsWith('--file=')
+    ) {
+      const eqIdx = arg.indexOf('=');
+      const val = eqIdx === -1 ? argv[++i] : arg.slice(eqIdx + 1);
+      if (!val || val.trim().length === 0 || val.startsWith('--')) {
+        console.error(`[run-e2e] Missing pattern after ${eqIdx === -1 ? arg : arg.slice(0, eqIdx)}.`);
+        process.exit(1);
       }
-      opts.scope = val;
+      scopeParts.push(val.trim());
+    } else if (arg === '--feature' || arg.startsWith('--feature=')) {
+      const val = arg === '--feature' ? argv[++i] : arg.slice('--feature='.length);
+      if (!val || val.trim().length === 0 || val.startsWith('--')) {
+        console.error(`[run-e2e] Missing feature ID(s) after --feature.`);
+        process.exit(1);
+      }
+      const tokens = val
+        .split(/[,|\s]+/)
+        .map((t) => t.trim().replace(/^@/, '').toUpperCase())
+        .filter(Boolean);
+      if (tokens.length === 0) {
+        console.error(`[run-e2e] Empty --feature value.`);
+        process.exit(1);
+      }
+      for (const tok of tokens) {
+        if (!VALID_FEATURE_SET.has(tok)) {
+          console.error(
+            `[run-e2e] Invalid --feature tag "${tok}". Expected zero-padded F01..F36.`,
+          );
+          process.exit(1);
+        }
+        if (!opts.features.includes(tok)) {
+          opts.features.push(tok);
+        }
+      }
+    } else if (arg === '--test-id' || arg.startsWith('--test-id=')) {
+      const val = arg === '--test-id' ? argv[++i] : arg.slice('--test-id='.length);
+      if (!val || val.trim().length === 0 || val.startsWith('--')) {
+        console.error(`[run-e2e] Missing test ID(s) after --test-id.`);
+        process.exit(1);
+      }
+      const tokens = val
+        .split(/[,|\s]+/)
+        .map((t) => t.trim().replace(/^\[|\]$/g, ''))
+        .filter(Boolean);
+      if (tokens.length === 0) {
+        console.error(`[run-e2e] Empty --test-id value.`);
+        process.exit(1);
+      }
+      for (const tok of tokens) {
+        if (!/^(?:T[1-4]|T3-\d{2}|S\d{2}|F\d{2})$/i.test(tok)) {
+          console.error(
+            `[run-e2e] Invalid --test-id "${tok}". Expected IDs like T3-08, S12, or F14.`,
+          );
+          process.exit(1);
+        }
+        const upper = tok.toUpperCase();
+        if (!opts.testIds.includes(upper)) {
+          opts.testIds.push(upper);
+        }
+      }
+    } else if (arg === '--grep' || arg === '-g' || arg.startsWith('--grep=')) {
+      const val =
+        arg === '--grep' || arg === '-g' ? argv[++i] : arg.slice('--grep='.length);
+      if (!val || val.trim().length === 0) {
+        console.error(`[run-e2e] Missing pattern after --grep.`);
+        process.exit(1);
+      }
+      try {
+        new RegExp(val);
+      } catch (err) {
+        console.error(`[run-e2e] Invalid --grep regular expression "${val}": ${String(err)}`);
+        process.exit(1);
+      }
+      opts.grep = val;
+    } else if (arg === '--expect-count' || arg.startsWith('--expect-count=')) {
+      const val =
+        arg === '--expect-count' ? argv[++i] : arg.slice('--expect-count='.length);
+      if (!val || !/^\d+$/.test(val)) {
+        console.error(`[run-e2e] Invalid --expect-count "${val ?? ''}". Expected non-negative integer.`);
+        process.exit(1);
+      }
+      opts.expectCount = Number(val);
     } else {
       console.error(`[run-e2e] Unknown CLI argument: "${arg}"`);
       printUsage();
-      process.exit(2);
+      process.exit(1);
     }
+  }
+
+  if (scopeParts.length > 0) {
+    opts.scope = scopeParts.join(',');
   }
 
   return opts;
@@ -81,14 +550,20 @@ function parseCliArgs(argv) {
 
 function runNodeSubprocess(scriptPath, args, options = {}) {
   const { cwd = e2eRoot, env = {}, quiet = false } = options;
+  const childEnv = {
+    ...process.env,
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
+    ...env,
+  };
+  for (const [k, v] of Object.entries(childEnv)) {
+    if (v === undefined) {
+      delete childEnv[k];
+    }
+  }
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [scriptPath, ...args], {
       cwd,
-      env: {
-        ...process.env,
-        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
-        ...env,
-      },
+      env: childEnv,
       stdio: quiet ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     });
 
@@ -874,10 +1349,117 @@ function buildTempTsconfigPayload(tsFiles) {
   };
 }
 
+function resolveScopeAndFilterOptions(opts, testRootDir, isDryCheck = false) {
+  const features = [...(opts.features || [])];
+  const testIds = [...(opts.testIds || [])];
+  let matchedFiles = null;
+
+  if (opts.scope) {
+    const rawTokens = opts.scope
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (rawTokens.length === 0) {
+      return {
+        ok: false,
+        error: `Empty --scope value "${opts.scope}".`,
+      };
+    }
+
+    const fileSet = new Set();
+    for (const tok of rawTokens) {
+      const filesForTok = matchScopedSpecFiles(testRootDir, tok, opts.tier);
+      if (filesForTok.length > 0) {
+        for (const f of filesForTok) {
+          fileSet.add(f);
+        }
+        continue;
+      }
+
+      if (!isDryCheck) {
+        const featMatch = tok.match(/^@?(F\d{2})$/i);
+        if (featMatch && VALID_FEATURE_SET.has(featMatch[1].toUpperCase())) {
+          const fid = featMatch[1].toUpperCase();
+          if (!features.includes(fid)) {
+            features.push(fid);
+          }
+          continue;
+        }
+        const idMatch = tok.match(/^\[?(T3-\d{2}|S\d{2})\]?$/i);
+        if (idMatch) {
+          const tid = idMatch[1].toUpperCase();
+          if (!testIds.includes(tid)) {
+            testIds.push(tid);
+          }
+          continue;
+        }
+      }
+
+      return {
+        ok: false,
+        error: `--scope token "${tok}" matched 0 .spec.ts files under ${testRootDir}.`,
+      };
+    }
+
+    if (fileSet.size > 0) {
+      matchedFiles = Array.from(fileSet).sort();
+    }
+  }
+
+  const grepParts = [];
+  if (features.length > 0) {
+    grepParts.push(`@(?:${features.join('|')})(?!\\d)`);
+  }
+  if (testIds.length > 0) {
+    grepParts.push(`\\[(?:${testIds.map(escapeRegex).join('|')})\\]`);
+  }
+  if (opts.grep !== null) {
+    grepParts.push(opts.grep);
+  }
+
+  let compiledGrep = null;
+  if (grepParts.length === 1) {
+    compiledGrep = grepParts[0];
+  } else if (grepParts.length > 1) {
+    compiledGrep = `^(?:${grepParts.map((p) => `(?=.*(?:${p}))`).join('')}).*$`;
+  }
+
+  const hasScopeOrFilter = Boolean(
+    matchedFiles !== null || compiledGrep !== null || opts.scope,
+  );
+
+  return {
+    ok: true,
+    hasScopeOrFilter,
+    matchedFiles,
+    compiledGrep,
+    features,
+    testIds,
+  };
+}
+
 async function handleListMode(opts) {
+  const testRootDir = process.env.E2E_TEST_DIR
+    ? path.resolve(e2eRoot, process.env.E2E_TEST_DIR)
+    : path.join(e2eRoot, 'tests');
+
+  const resolved = resolveScopeAndFilterOptions(opts, testRootDir, false);
+  if (!resolved.ok) {
+    console.error(`[run-e2e] ERROR: ${resolved.error}`);
+    return 1;
+  }
+
   const pwArgs = [];
+  if (resolved.matchedFiles && resolved.matchedFiles.length > 0) {
+    for (const abs of resolved.matchedFiles) {
+      pwArgs.push(`${escapeRegex(abs.split(path.sep).join('/'))}$`);
+    }
+  }
   if (opts.tier !== null) {
     pwArgs.push(`--project=tier${opts.tier}`);
+  }
+  if (resolved.compiledGrep !== null) {
+    pwArgs.push('--grep', resolved.compiledGrep);
   }
   pwArgs.push('--list', '--pass-with-no-tests');
 
@@ -890,6 +1472,13 @@ async function handleListMode(opts) {
   if (exitCode !== 0 || loadErrors > 0) {
     console.error(
       `[run-e2e] --list failed (playwrightExit=${exitCode}, loadErrors=${loadErrors}).`,
+    );
+    return 1;
+  }
+
+  if (opts.expectCount !== null && discovered.length !== opts.expectCount) {
+    console.error(
+      `[run-e2e] ERROR: Expected ${opts.expectCount} test(s) (--expect-count), but discovered ${discovered.length}.`,
     );
     return 1;
   }
@@ -918,13 +1507,14 @@ async function handleScopedDryCheck(opts) {
     ? path.resolve(e2eRoot, process.env.E2E_TEST_DIR)
     : path.join(e2eRoot, 'tests');
 
-  const matchedSpecAbsPaths = matchScopedSpecFiles(testRootDir, opts.scope, opts.tier);
-  if (matchedSpecAbsPaths.length === 0) {
+  const resolved = resolveScopeAndFilterOptions(opts, testRootDir, true);
+  if (!resolved.ok || !resolved.matchedFiles || resolved.matchedFiles.length === 0) {
     console.error(
       `[run-e2e] Scoped --dry-check matched 0 .spec.ts files for --scope "${opts.scope}" under ${testRootDir}.`,
     );
     return 1;
   }
+  const matchedSpecAbsPaths = resolved.matchedFiles;
 
   const tmpTsconfigPath = path.join(
     os.tmpdir(),
@@ -1221,17 +1811,100 @@ function findStepProblem(steps) {
   return null;
 }
 
-async function runSingleTierLive(tierNum) {
+async function runPreflightSelectionCheck(testRootDir, opts, resolved) {
+  const pwArgs = [];
+  if (resolved.matchedFiles && resolved.matchedFiles.length > 0) {
+    for (const abs of resolved.matchedFiles) {
+      pwArgs.push(`${escapeRegex(abs.split(path.sep).join('/'))}$`);
+    }
+  }
+  if (opts.tier !== null) {
+    pwArgs.push(`--project=tier${opts.tier}`);
+  }
+  if (resolved.compiledGrep !== null) {
+    pwArgs.push('--grep', resolved.compiledGrep);
+  }
+  pwArgs.push('--list', '--pass-with-no-tests');
+
+  const { exitCode, report } = await invokePlaywrightWithJsonReport(pwArgs, {}, true, {
+    ephemeralOutputDir: true,
+  });
+  const loadErrors = Array.isArray(report?.errors) ? report.errors.length : 0;
+  const discovered = flattenDiscoveredSpecs(report);
+
+  if (exitCode !== 0 || loadErrors > 0) {
+    return {
+      ok: false,
+      error: `Pre-flight discovery failed (exit=${exitCode}, loadErrors=${loadErrors}).`,
+    };
+  }
+
+  const byTier = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  for (const { spec, fileFromSuite } of discovered) {
+    const posixFile = String(spec.file || fileFromSuite || '').replace(/\\/g, '/');
+    const dirMatch = posixFile.match(/(?:^|\/)tier([1-4])\//);
+    const projMatch = String(spec.tests?.[0]?.projectName || '').match(/^tier([1-4])$/);
+    const tier = dirMatch
+      ? Number(dirMatch[1])
+      : projMatch
+        ? Number(projMatch[1])
+        : null;
+    if (tier && byTier[tier] !== undefined) {
+      byTier[tier] += 1;
+    }
+  }
+
+  const activeTiers = [1, 2, 3, 4].filter((t) => byTier[t] > 0);
+  console.log(
+    `[run-e2e] Pre-flight selection: ${discovered.length} test(s) across tier(s) [${activeTiers.map((t) => `tier${t}:${byTier[t]}`).join(', ')}]`,
+  );
+
+  if (discovered.length === 0) {
+    return {
+      ok: false,
+      error: `Scope/filter matched 0 tests. Refusing to run empty suite.`,
+    };
+  }
+
+  if (opts.expectCount !== null && discovered.length !== opts.expectCount) {
+    return {
+      ok: false,
+      error: `Expected ${opts.expectCount} matched test(s) (--expect-count), but pre-flight found ${discovered.length}.`,
+    };
+  }
+
+  return {
+    ok: true,
+    totalCount: discovered.length,
+    byTier,
+    activeTiers,
+  };
+}
+
+async function runSingleTierLive(
+  tierNum,
+  tierScopedFiles = null,
+  compiledGrep = null,
+) {
   console.log(`\n[run-e2e] === Executing Tier ${tierNum} (project=tier${tierNum}) ===`);
   const testRootDir = process.env.E2E_TEST_DIR
     ? path.resolve(e2eRoot, process.env.E2E_TEST_DIR)
     : path.join(e2eRoot, 'tests');
   const tierDir = path.join(testRootDir, `tier${tierNum}`);
 
-  const { exitCode, report } = await invokePlaywrightWithJsonReport([
-    `--project=tier${tierNum}`,
-    '--pass-with-no-tests',
-  ]);
+  const pwArgs = [];
+  if (Array.isArray(tierScopedFiles) && tierScopedFiles.length > 0) {
+    for (const abs of tierScopedFiles) {
+      pwArgs.push(`${escapeRegex(abs.split(path.sep).join('/'))}$`);
+    }
+  }
+  pwArgs.push(`--project=tier${tierNum}`);
+  if (compiledGrep !== null) {
+    pwArgs.push('--grep', compiledGrep);
+  }
+  pwArgs.push('--pass-with-no-tests');
+
+  const { exitCode, report } = await invokePlaywrightWithJsonReport(pwArgs);
 
   const loadErrors = Array.isArray(report?.errors) ? report.errors.length : 0;
   const stats = report?.stats || {};
@@ -1246,7 +1919,10 @@ async function runSingleTierLive(tierNum) {
   let genuinelyPassed = 0;
 
   const auditedSpecAbsPaths = new Set();
-  const tierSpecFiles = collectFilesRecursive(tierDir, (_abs, name) => name.endsWith('.spec.ts'));
+  const tierSpecFiles =
+    Array.isArray(tierScopedFiles) && tierScopedFiles.length > 0
+      ? tierScopedFiles
+      : collectFilesRecursive(tierDir, (_abs, name) => name.endsWith('.spec.ts'));
   for (const absSpec of tierSpecFiles) {
     auditedSpecAbsPaths.add(absSpec);
     const relPosix = path.relative(testRootDir, absSpec).split(path.sep).join('/');
@@ -1350,8 +2026,46 @@ async function runSingleTierLive(tierNum) {
   };
 }
 
-async function handleSingleTierMode(tierNum) {
-  const res = await runSingleTierLive(tierNum);
+async function handleSingleTierMode(tierNum, opts, envInfo) {
+  const testRootDir = process.env.E2E_TEST_DIR
+    ? path.resolve(e2eRoot, process.env.E2E_TEST_DIR)
+    : path.join(e2eRoot, 'tests');
+
+  const resolved = resolveScopeAndFilterOptions(opts, testRootDir, false);
+  if (!resolved.ok) {
+    console.error(`[run-e2e] ERROR: ${resolved.error}`);
+    return 1;
+  }
+
+  printResolvedEnvBanner(envInfo);
+
+  let tierScopedFiles = null;
+  if (resolved.matchedFiles) {
+    tierScopedFiles = resolved.matchedFiles.filter((abs) => {
+      const relPosix = path.relative(testRootDir, abs).split(path.sep).join('/');
+      return relPosix.startsWith(`tier${tierNum}/`);
+    });
+    if (tierScopedFiles.length === 0) {
+      console.error(
+        `[run-e2e] ERROR: Scope matched 0 spec files in tier${tierNum}.`,
+      );
+      return 1;
+    }
+  }
+
+  if (resolved.hasScopeOrFilter || opts.expectCount !== null) {
+    const preflight = await runPreflightSelectionCheck(testRootDir, opts, resolved);
+    if (!preflight.ok) {
+      console.error(`[run-e2e] ERROR: ${preflight.error}`);
+      return 1;
+    }
+  }
+
+  const res = await runSingleTierLive(
+    tierNum,
+    tierScopedFiles,
+    resolved.compiledGrep,
+  );
 
   if (!res.tierPassed) {
     console.error(
@@ -1364,7 +2078,31 @@ async function handleSingleTierMode(tierNum) {
   return 0;
 }
 
-async function handleFullSuiteMode() {
+async function handleFullSuiteMode(opts, envInfo) {
+  const testRootDir = process.env.E2E_TEST_DIR
+    ? path.resolve(e2eRoot, process.env.E2E_TEST_DIR)
+    : path.join(e2eRoot, 'tests');
+
+  const resolved = resolveScopeAndFilterOptions(opts, testRootDir, false);
+  if (!resolved.ok) {
+    console.error(`[run-e2e] ERROR: ${resolved.error}`);
+    return 1;
+  }
+
+  printResolvedEnvBanner(envInfo);
+
+  let tiersToExecute = [1, 2, 3, 4];
+  if (resolved.hasScopeOrFilter || opts.expectCount !== null) {
+    const preflight = await runPreflightSelectionCheck(testRootDir, opts, resolved);
+    if (!preflight.ok) {
+      console.error(`[run-e2e] ERROR: ${preflight.error}`);
+      return 1;
+    }
+    if (resolved.hasScopeOrFilter) {
+      tiersToExecute = preflight.activeTiers;
+    }
+  }
+
   const tierResults = [];
   let grandTotal = 0;
   let grandPassed = 0;
@@ -1374,8 +2112,23 @@ async function handleFullSuiteMode() {
   let grandLoadErrors = 0;
   let grandIntegrityViolations = 0;
 
-  for (const tierNum of [1, 2, 3, 4]) {
-    const res = await runSingleTierLive(tierNum);
+  for (const tierNum of tiersToExecute) {
+    const tierScopedFiles = resolved.matchedFiles
+      ? resolved.matchedFiles.filter((abs) => {
+          const relPosix = path.relative(testRootDir, abs).split(path.sep).join('/');
+          return relPosix.startsWith(`tier${tierNum}/`);
+        })
+      : null;
+
+    if (tierScopedFiles !== null && tierScopedFiles.length === 0) {
+      continue;
+    }
+
+    const res = await runSingleTierLive(
+      tierNum,
+      tierScopedFiles,
+      resolved.compiledGrep,
+    );
     tierResults.push(res);
     grandTotal += res.total;
     grandPassed += res.passed;
@@ -1390,11 +2143,16 @@ async function handleFullSuiteMode() {
     `\n[run-e2e] === Grand Suite Summary: total=${grandTotal}, passed=${grandPassed}, failed=${grandUnexpected}, flaky=${grandFlaky}, skipped=${grandSkipped}, loadErrors=${grandLoadErrors}, integrityViolations=${grandIntegrityViolations} ===`,
   );
 
-  const emptyTiers = tierResults.filter((r) => r.total === 0).map((r) => `tier${r.tierNum}`);
-  if (emptyTiers.length > 0) {
-    console.error(
-      `[run-e2e] Full suite FAILED: empty tier(s) [${emptyTiers.join(', ')}] (every tier 1..4 must execute > 0 tests).`,
-    );
+  if (!resolved.hasScopeOrFilter) {
+    const emptyTiers = tierResults.filter((r) => r.total === 0).map((r) => `tier${r.tierNum}`);
+    if (emptyTiers.length > 0) {
+      console.error(
+        `[run-e2e] Full suite FAILED: empty tier(s) [${emptyTiers.join(', ')}] (every tier 1..4 must execute > 0 tests).`,
+      );
+      return 1;
+    }
+  } else if (tierResults.length === 0 || grandTotal === 0) {
+    console.error(`[run-e2e] Scoped suite FAILED: 0 tests executed.`);
     return 1;
   }
 
@@ -1412,12 +2170,12 @@ async function handleFullSuiteMode() {
 
   if (!everyTierPassedCleanly || grandTotal <= 0 || grandPassed !== grandTotal) {
     console.error(
-      `[run-e2e] Full suite FAILED (requires > 0 tests in EVERY tier 1..4 and 100% genuine pass with 0 skipped/flaky/expected-fail/loadErrors).`,
+      `[run-e2e] Suite FAILED (requires > 0 tests and 100% genuine pass with 0 skipped/flaky/expected-fail/loadErrors).`,
     );
     return 1;
   }
 
-  console.log(`[run-e2e] Full suite PASSED (${grandPassed}/${grandTotal}).`);
+  console.log(`[run-e2e] Suite PASSED (${grandPassed}/${grandTotal}).`);
   return 0;
 }
 
@@ -1485,6 +2243,8 @@ const server = http.createServer((req, res) => {
       hermes_gateway: 'offline_mock',
       isolated_marker: process.env.TEST_ISOLATED_MARKER || null,
       second_brain_dir: process.env.SECOND_BRAIN_DIR || null,
+      youtube_lists_db: process.env.YOUTUBE_LISTS_DB || null,
+      youtube_lists_notes_dir: process.env.YOUTUBE_LISTS_NOTES_DIR || null,
     }));
     return;
   }
@@ -1866,6 +2626,14 @@ import { test, expect } from '@playwright/test';
 import {
   E2E_PATHS,
   E2E_URLS,
+  PRIMARY_PROTECTED_DATA_ROOT,
+  getProtectedDataRoots,
+  assertSafeE2eDataPath,
+  isSafeE2eDataPath,
+  registerHarnessOwnedVaultRoot,
+  isHarnessOwnedVaultRoot,
+  buildDefaultBackendEnv,
+  assertSafeCleanupRoot,
   ensureStackReady,
   stopManagedStack,
   withIsolatedBackend,
@@ -1896,12 +2664,118 @@ import {
   FUI_VIOLATING_SELF_TEST_HTML,
 } from '../../harness';
 
-test('[T1][F01] env.ts: E2E_PATHS, ensureStackReady (.wasm + SPA fallback) & withIsolatedBackend', { tag: ['@tier1', '@F01'] }, async () => {
+test('[T1][F01] env.ts: E2E_PATHS, R1-R3 safety guards, ensureStackReady (.wasm + SPA fallback) & withIsolatedBackend', { tag: ['@tier1', '@F01'] }, async () => {
   expect(fs.existsSync(E2E_PATHS.repoRoot)).toBe(true);
   expect(fs.existsSync(E2E_PATHS.e2eRoot)).toBe(true);
   expect(fs.existsSync(E2E_PATHS.systemsReqDir)).toBe(true);
   expect(E2E_URLS.apiBaseUrl).toBe(\`\${E2E_URLS.baseUrl}/api\`);
   expect(E2E_URLS.mcpUrl).toBe(\`\${E2E_URLS.baseUrl}/mcp\`);
+
+  // E2E-S R1 & R2: Temporary stand-in protected data directory checks
+  const standInRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-e2e-standin-'));
+  const standInData = path.join(standInRoot, 'data');
+  fs.mkdirSync(path.join(standInData, 'second-brain'), { recursive: true });
+  fs.mkdirSync(path.join(standInData, 'database'), { recursive: true });
+  fs.mkdirSync(path.join(standInData, 'knowledge-data', 'lists', 'youtube'), { recursive: true });
+  const symlinkToStandIn = path.join(standInRoot, 'sym-to-data');
+  fs.symlinkSync(standInData, symlinkToStandIn);
+
+  const savedEnv: Record<string, string | undefined> = {
+    E2E_PROTECTED_DATA_ROOTS: process.env.E2E_PROTECTED_DATA_ROOTS,
+    E2E_EXTRA_PROTECTED_DATA_ROOTS: process.env.E2E_EXTRA_PROTECTED_DATA_ROOTS,
+    SECOND_BRAIN_DIR: process.env.SECOND_BRAIN_DIR,
+    YOUTUBE_LISTS_DB: process.env.YOUTUBE_LISTS_DB,
+    YOUTUBE_LISTS_NOTES_DIR: process.env.YOUTUBE_LISTS_NOTES_DIR,
+    E2E_SECOND_BRAIN_DIR: process.env.E2E_SECOND_BRAIN_DIR,
+    E2E_YOUTUBE_LISTS_DB: process.env.E2E_YOUTUBE_LISTS_DB,
+    E2E_YOUTUBE_LISTS_NOTES_DIR: process.env.E2E_YOUTUBE_LISTS_NOTES_DIR,
+  };
+  try {
+    process.env.E2E_PROTECTED_DATA_ROOTS = standInData;
+    const roots = getProtectedDataRoots();
+    expect(roots).toContain(PRIMARY_PROTECTED_DATA_ROOT);
+    expect(roots.some((r) => r.endsWith(path.join(path.basename(standInRoot), 'data')))).toBe(true);
+
+    // R1: Plain caller env vars pointing into protected data/ must be ignored in favor of temp fixtures
+    delete process.env.E2E_SECOND_BRAIN_DIR;
+    delete process.env.E2E_YOUTUBE_LISTS_DB;
+    delete process.env.E2E_YOUTUBE_LISTS_NOTES_DIR;
+    process.env.SECOND_BRAIN_DIR = path.join(standInData, 'second-brain');
+    process.env.YOUTUBE_LISTS_DB = path.join(standInData, 'database', 'youtube-lists.sqlite');
+    process.env.YOUTUBE_LISTS_NOTES_DIR = path.join(standInData, 'knowledge-data', 'lists', 'youtube');
+
+    expect(E2E_PATHS.secondBrainDir.startsWith(standInData)).toBe(false);
+    expect(E2E_PATHS.youtubeListsDb.startsWith(standInData)).toBe(false);
+    expect(E2E_PATHS.youtubeListsNotesDir.startsWith(standInData)).toBe(false);
+    expect(isSafeE2eDataPath(E2E_PATHS.secondBrainDir)).toBe(true);
+    expect(isSafeE2eDataPath(E2E_PATHS.youtubeListsDb)).toBe(true);
+    expect(isSafeE2eDataPath(E2E_PATHS.youtubeListsNotesDir)).toBe(true);
+
+    const builtEnv = buildDefaultBackendEnv('18089');
+    expect(builtEnv.SECOND_BRAIN_DIR.startsWith(standInData)).toBe(false);
+    expect(builtEnv.YOUTUBE_LISTS_DB.startsWith(standInData)).toBe(false);
+    expect(builtEnv.YOUTUBE_LISTS_NOTES_DIR.startsWith(standInData)).toBe(false);
+
+    // R2: Direct, symlinked, missing-leaf symlinked, relative-traversal, empty, and bare tmpdir paths must be rejected
+    expect(() => assertSafeE2eDataPath(standInData, 'R2-direct-root')).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    expect(() => assertSafeE2eDataPath(path.join(standInData, 'second-brain'), 'R2-direct-child')).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    expect(() => assertSafeE2eDataPath(path.join(symlinkToStandIn, 'second-brain'), 'R2-symlink')).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    expect(() => assertSafeE2eDataPath(path.join(symlinkToStandIn, 'missing-leaf', 'deep', 'vault'), 'R2-symlink-missing-leaf')).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    expect(() => assertSafeE2eDataPath(path.join(standInRoot, 'other', '..', 'data', 'second-brain'), 'R2-relative-dots')).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    expect(() => assertSafeE2eDataPath('', 'R2-empty')).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    expect(() => assertSafeE2eDataPath(os.tmpdir(), 'R2-bare-tmpdir')).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+
+    await expect(
+      withIsolatedBackend({ SECOND_BRAIN_DIR: path.join(standInData, 'second-brain') }, async () => {}),
+    ).rejects.toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    await expect(
+      withIsolatedBackend({ YOUTUBE_LISTS_DB: path.join(symlinkToStandIn, 'database', 'youtube-lists.sqlite') }, async () => {}),
+    ).rejects.toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+  } finally {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(standInRoot, { recursive: true, force: true });
+  }
+
+  // E2E-S R3: Refuse blind reuse of an unverified already-listening server unless E2E_ALLOW_EXTERNAL_SERVER=true
+  const rogueServer = http.createServer((req, res) => {
+    if (req.url === '/api/health') {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        status: 'ok',
+        db_online: true,
+        redis_online: true,
+        hermes_gateway: 'offline_mock',
+      }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((r) => rogueServer.listen(0, '127.0.0.1', () => r()));
+  const roguePort = (rogueServer.address() as net.AddressInfo).port;
+  const prevBaseUrl = process.env.E2E_BASE_URL;
+  const prevAllowExt = process.env.E2E_ALLOW_EXTERNAL_SERVER;
+  try {
+    await stopManagedStack();
+    process.env.E2E_BASE_URL = \`http://127.0.0.1:\${roguePort}\`;
+    delete process.env.E2E_ALLOW_EXTERNAL_SERVER;
+    await expect(ensureStackReady({ requireMobile: false })).rejects.toThrow(/\\[E2E-SAFETY-GUARD\\] R3/);
+
+    process.env.E2E_ALLOW_EXTERNAL_SERVER = 'true';
+    const extReady = await ensureStackReady({ requireMobile: false });
+    expect(extReady.baseUrl).toBe(\`http://127.0.0.1:\${roguePort}\`);
+  } finally {
+    if (prevBaseUrl === undefined) delete process.env.E2E_BASE_URL;
+    else process.env.E2E_BASE_URL = prevBaseUrl;
+    if (prevAllowExt === undefined) delete process.env.E2E_ALLOW_EXTERNAL_SERVER;
+    else process.env.E2E_ALLOW_EXTERNAL_SERVER = prevAllowExt;
+    await new Promise<void>((r) => rogueServer.close(() => r()));
+    await stopManagedStack();
+  }
 
   try {
     const ready = await ensureStackReady({ requireMobile: true });
@@ -2124,12 +2998,43 @@ test('[T1][F07] api-helpers.ts: ApiClient URL rules, PAT helper, SSE stream read
   await expect(reg.runAll()).rejects.toThrow(AggregateError);
   expect(order).toEqual([3, 2, 1]);
 
-  // SecondBrain snapshot & .gitkeep-safe cleanup on isolated temp dir
+  // E2E-S R4: SecondBrain snapshot & cleanup confined to harness-owned temp vault + pre-existing empty dir preservation
   const tempVault = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-e2e-sbtest-'));
+  const unownedVault = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-e2e-unowned-'));
+  const standInRootR4 = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-e2e-standin-r4-'));
+  const standInDataR4 = path.join(standInRootR4, 'data');
+  fs.mkdirSync(path.join(standInDataR4, 'second-brain'), { recursive: true });
+  const prevProtectedR4 = process.env.E2E_PROTECTED_DATA_ROOTS;
   try {
+    process.env.E2E_PROTECTED_DATA_ROOTS = standInDataR4;
+
+    // 1. Refuse stand-in data/ root
+    expect(() => snapshotSecondBrainFiles(path.join(standInDataR4, 'second-brain'))).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+    expect(() => cleanupNewSecondBrainFiles(new Set(), path.join(standInDataR4, 'second-brain'))).toThrow(/\\[E2E-SAFETY-GUARD\\]/);
+
+    // 2. Refuse unowned /tmp root (no .hermes-e2e-vault-root marker)
+    expect(isHarnessOwnedVaultRoot(unownedVault)).toBe(false);
+    expect(() => snapshotSecondBrainFiles(unownedVault)).toThrow(/\\[E2E-SAFETY-GUARD\\] R4/);
+    expect(() => cleanupNewSecondBrainFiles(new Set(), unownedVault)).toThrow(/\\[E2E-SAFETY-GUARD\\] R4/);
+
+    // 3. Register tempVault as harness-owned for this run
+    registerHarnessOwnedVaultRoot(tempVault);
+    expect(isHarnessOwnedVaultRoot(tempVault)).toBe(true);
+
+    // 4. Refuse if .git or .obsidian exists inside the root
+    fs.mkdirSync(path.join(tempVault, '.obsidian'), { recursive: true });
+    expect(() => snapshotSecondBrainFiles(tempVault)).toThrow(/\\[E2E-SAFETY-GUARD\\] R4/);
+    fs.rmSync(path.join(tempVault, '.obsidian'), { recursive: true, force: true });
+
+    fs.mkdirSync(path.join(tempVault, '.git'), { recursive: true });
+    expect(() => assertSafeCleanupRoot(tempVault, 'R4-git-check')).toThrow(/\\[E2E-SAFETY-GUARD\\] R4/);
+    fs.rmSync(path.join(tempVault, '.git'), { recursive: true, force: true });
+
+    // 5. Verify pre-existing files AND pre-existing empty directories are preserved, while post-snapshot files/dirs are removed
     fs.writeFileSync(path.join(tempVault, '.gitkeep'), '', 'utf8');
     fs.mkdirSync(path.join(tempVault, 'Existing'), { recursive: true });
     fs.writeFileSync(path.join(tempVault, 'Existing', 'keep.md'), '# keep', 'utf8');
+    fs.mkdirSync(path.join(tempVault, 'PreExistingEmptyDir', 'NestedEmpty'), { recursive: true });
 
     const before = snapshotSecondBrainFiles(tempVault);
     expect(before.has('.gitkeep')).toBe(true);
@@ -2139,14 +3044,24 @@ test('[T1][F07] api-helpers.ts: ApiClient URL rules, PAT helper, SSE stream read
     fs.writeFileSync(path.join(tempVault, 'Daily', '2026-11-14.md'), '# daily', 'utf8');
     fs.mkdirSync(path.join(tempVault, 'Reviews'), { recursive: true });
     fs.writeFileSync(path.join(tempVault, 'Reviews', '2026-W46.md'), '# review', 'utf8');
+    fs.writeFileSync(path.join(tempVault, 'Existing', 'transient.md'), '# transient', 'utf8');
+    fs.writeFileSync(path.join(tempVault, 'PreExistingEmptyDir', 'transient2.md'), '# transient2', 'utf8');
 
     cleanupNewSecondBrainFiles(before, tempVault);
     expect(fs.existsSync(path.join(tempVault, '.gitkeep'))).toBe(true);
     expect(fs.existsSync(path.join(tempVault, 'Existing', 'keep.md'))).toBe(true);
+    expect(fs.existsSync(path.join(tempVault, 'Existing', 'transient.md'))).toBe(false);
+    expect(fs.existsSync(path.join(tempVault, 'PreExistingEmptyDir'))).toBe(true);
+    expect(fs.existsSync(path.join(tempVault, 'PreExistingEmptyDir', 'NestedEmpty'))).toBe(true);
+    expect(fs.existsSync(path.join(tempVault, 'PreExistingEmptyDir', 'transient2.md'))).toBe(false);
     expect(fs.existsSync(path.join(tempVault, 'Daily'))).toBe(false);
     expect(fs.existsSync(path.join(tempVault, 'Reviews'))).toBe(false);
   } finally {
+    if (prevProtectedR4 === undefined) delete process.env.E2E_PROTECTED_DATA_ROOTS;
+    else process.env.E2E_PROTECTED_DATA_ROOTS = prevProtectedR4;
     fs.rmSync(tempVault, { recursive: true, force: true });
+    fs.rmSync(unownedVault, { recursive: true, force: true });
+    fs.rmSync(standInRootR4, { recursive: true, force: true });
   }
 });
 
@@ -2880,6 +3795,112 @@ test('[T1][F18] fui-rubric.ts: all 7 DOM/style inspectors on compliant & violati
       );
     }
 
+    // 6b. Stage C-Safety (R1, R2, R5 CLI-level self-tests)
+    console.log(`[self-test] Stage C-Safety: Verifying CLI R1 default temp fixtures, R2 protected data/ guards, and R5 scoped/filtered runs...`);
+    const cliStandInRoot = path.join(tmpSelfDir, 'cli-standin');
+    const cliStandInData = path.join(cliStandInRoot, 'data');
+    fs.mkdirSync(path.join(cliStandInData, 'second-brain'), { recursive: true });
+    fs.mkdirSync(path.join(cliStandInData, 'database'), { recursive: true });
+    fs.mkdirSync(path.join(cliStandInData, 'knowledge-data', 'lists', 'youtube'), { recursive: true });
+    const cliStandInSym = path.join(cliStandInRoot, 'sym-data');
+    fs.symlinkSync(cliStandInData, cliStandInSym);
+
+    // R1 CLI: Plain caller env vars pointing into stand-in data/ are ignored in favor of temp fixtures
+    const r1PrintEnvRes = await runNodeSubprocess(
+      runnerScript,
+      ['--print-env'],
+      {
+        env: {
+          E2E_TEST_DIR: goodTestsDir,
+          E2E_OUTPUT_DIR: outDir,
+          E2E_PROTECTED_DATA_ROOTS: cliStandInData,
+          E2E_RUN_FIXTURE_ROOT: undefined,
+          E2E_SECOND_BRAIN_DIR: undefined,
+          E2E_YOUTUBE_LISTS_DB: undefined,
+          E2E_YOUTUBE_LISTS_NOTES_DIR: undefined,
+          SECOND_BRAIN_DIR: path.join(cliStandInData, 'second-brain'),
+          YOUTUBE_LISTS_DB: path.join(cliStandInData, 'database', 'youtube-lists.sqlite'),
+          YOUTUBE_LISTS_NOTES_DIR: path.join(cliStandInData, 'knowledge-data', 'lists', 'youtube'),
+        },
+        quiet: true,
+      },
+    );
+    if (r1PrintEnvRes.exitCode !== 0) {
+      throw new Error(`Expected --print-env with plain caller data/ env vars to exit 0 (R1), got ${r1PrintEnvRes.exitCode}:\n${r1PrintEnvRes.stderr}`);
+    }
+    if (r1PrintEnvRes.stdout.includes(cliStandInData)) {
+      throw new Error(`R1 violation: --print-env resolved into protected stand-in data/ dir:\n${r1PrintEnvRes.stdout}`);
+    }
+
+    // R2 CLI: Explicit E2E_* overrides pointing into stand-in data/ (direct, symlink, missing leaf, relative '..', empty string) must fail fast with [E2E-SAFETY-GUARD]
+    for (const [caseLabel, badEnvOverride] of [
+      ['direct-vault', { E2E_SECOND_BRAIN_DIR: path.join(cliStandInData, 'second-brain') }],
+      ['symlink-vault', { E2E_SECOND_BRAIN_DIR: path.join(cliStandInSym, 'second-brain') }],
+      ['symlink-missing-leaf-db', { E2E_YOUTUBE_LISTS_DB: path.join(cliStandInSym, 'missing-dir', 'youtube-lists.sqlite') }],
+      ['relative-dots-notes', { E2E_YOUTUBE_LISTS_NOTES_DIR: path.join(cliStandInRoot, 'sub', '..', 'data', 'knowledge-data') }],
+      ['empty-string-vault', { E2E_SECOND_BRAIN_DIR: '' }],
+    ]) {
+      const r2CliRes = await runNodeSubprocess(
+        runnerScript,
+        ['--print-env'],
+        {
+          env: {
+            E2E_TEST_DIR: goodTestsDir,
+            E2E_OUTPUT_DIR: outDir,
+            E2E_PROTECTED_DATA_ROOTS: cliStandInData,
+            E2E_RUN_FIXTURE_ROOT: undefined,
+            E2E_SECOND_BRAIN_DIR: undefined,
+            E2E_YOUTUBE_LISTS_DB: undefined,
+            E2E_YOUTUBE_LISTS_NOTES_DIR: undefined,
+            ...badEnvOverride,
+          },
+          quiet: true,
+        },
+      );
+      if (r2CliRes.exitCode === 0 || !r2CliRes.stderr.includes('[E2E-SAFETY-GUARD]')) {
+        throw new Error(
+          `Expected R2 CLI guard (${caseLabel}) to exit non-zero with [E2E-SAFETY-GUARD], got code=${r2CliRes.exitCode}, stderr=${r2CliRes.stderr}`,
+        );
+      }
+    }
+
+    // R5 CLI: Unknown CLI flag, 0-match --scope, 0-match --feature, and --expect-count mismatch must exit 1
+    for (const [r5BadLabel, r5BadArgs] of [
+      ['unknown-flag', ['--unknown-bogus-flag']],
+      ['nonmatching-scope-live', ['--tier', '3', '--scope', 'nonexistent-scope-xyz']],
+      ['nonmatching-feature-live', ['--tier', '3', '--feature', 'F99']],
+      ['expect-count-mismatch-list', ['--tier', '3', '--scope', 'sample-pairwise', '--list', '--expect-count', '99']],
+      ['expect-count-mismatch-live', ['--tier', '3', '--scope', 'sample-pairwise', '--expect-count', '99']],
+    ]) {
+      const r5BadRes = await runNodeSubprocess(
+        runnerScript,
+        r5BadArgs,
+        { env: { E2E_TEST_DIR: goodTestsDir, E2E_OUTPUT_DIR: outDir }, quiet: true },
+      );
+      if (r5BadRes.exitCode === 0) {
+        throw new Error(`Expected R5 negative check (${r5BadLabel}) to exit non-zero, got 0`);
+      }
+    }
+
+    // R5 CLI: Live scoped runs (--tier 3 --scope, --tier 3 --feature, and multi-tier --scope with --expect-count 1) execute only the 1 matching test!
+    for (const [r5GoodLabel, r5GoodArgs] of [
+      ['tier3-scope', ['--tier', '3', '--scope', 'sample-pairwise', '--expect-count', '1']],
+      ['tier3-feature', ['--tier', '3', '--feature', 'F02', '--expect-count', '1']],
+      ['multitier-scope', ['--scope', 'sample-pairwise', '--expect-count', '1']],
+      ['list-feature-grep', ['--list', '--feature', 'F01', '--grep', 'pairwise tag contract', '--expect-count', '1']],
+    ]) {
+      const r5GoodRes = await runNodeSubprocess(
+        runnerScript,
+        r5GoodArgs,
+        { env: { E2E_TEST_DIR: goodTestsDir, E2E_OUTPUT_DIR: outDir }, quiet: true },
+      );
+      if (r5GoodRes.exitCode !== 0) {
+        throw new Error(
+          `Expected R5 positive check (${r5GoodLabel}) to exit 0, got ${r5GoodRes.exitCode}:\n${r5GoodRes.stdout}\n${r5GoodRes.stderr}`,
+        );
+      }
+    }
+
     // 7. Stage D: Live Playwright execution of harness-selftest.spec.ts in /usr/bin/google-chrome
     console.log(`[self-test] Stage D: Executing live Playwright harness self-test in Headless Chrome...`);
     const mockBasePort = await getEphemeralPort();
@@ -2899,7 +3920,7 @@ test('[T1][F18] fui-rubric.ts: all 7 DOM/style inspectors on compliant & violati
       throw new Error(`Stage D live Playwright harness self-test failed with code ${liveRes.exitCode}`);
     }
 
-    console.log(`\n[self-test] ALL E2E-M1 CLI & HARNESS SELF-TESTS PASSED!`);
+    console.log(`\n[self-test] ALL E2E-M1 & E2E-S (R1-R5) CLI & HARNESS SELF-TESTS PASSED!`);
     return 0;
   } finally {
     fs.rmSync(tmpSelfDir, { recursive: true, force: true });
@@ -2919,8 +3940,21 @@ async function main() {
     process.exit(code);
   }
 
+  let envInfo;
+  try {
+    envInfo = ensureRunnerFixtureAndSafetyEnv(opts);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  if (opts.printEnv) {
+    printResolvedEnvBanner(envInfo);
+    process.exit(0);
+  }
+
   if (opts.dryCheck) {
-    if (opts.scope) {
+    if (opts.scope || opts.feature || opts.testId || opts.grep) {
       const code = await handleScopedDryCheck(opts);
       process.exit(code);
     }
@@ -2934,11 +3968,11 @@ async function main() {
   }
 
   if (opts.tier !== null) {
-    const code = await handleSingleTierMode(opts.tier);
+    const code = await handleSingleTierMode(opts.tier, opts, envInfo);
     process.exit(code);
   }
 
-  const code = await handleFullSuiteMode();
+  const code = await handleFullSuiteMode(opts, envInfo);
   process.exit(code);
 }
 

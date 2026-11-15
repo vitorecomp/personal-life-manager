@@ -1,5 +1,12 @@
 import path from 'node:path';
 import { defineConfig } from '@playwright/test';
+import { E2E_PATHS, ensureRunFixtureEnv } from './harness/env';
+
+// Initialize shared per-run temporary fixture root and validate paths before forking workers
+ensureRunFixtureEnv();
+void E2E_PATHS.secondBrainDir;
+void E2E_PATHS.youtubeListsDb;
+void E2E_PATHS.youtubeListsNotesDir;
 
 const e2eRoot = import.meta.dirname;
 const testDir = process.env.E2E_TEST_DIR

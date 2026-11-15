@@ -1,12 +1,24 @@
 export {
   E2E_PATHS,
   E2E_URLS,
+  PRIMARY_PROTECTED_DATA_ROOT,
+  VAULT_OWNERSHIP_MARKER_FILE,
+  canonicalizeWithMissingLeaf,
+  getProtectedDataRoots,
+  assertSafeE2eDataPath,
+  isSafeE2eDataPath,
+  registerHarnessOwnedVaultRoot,
+  getVaultOwnershipInfo,
+  isHarnessOwnedVaultRoot,
+  ensureRunFixtureEnv,
+  buildDefaultBackendEnv,
   ensureStackReady,
   stopManagedStack,
   withIsolatedBackend,
   resolveBackendBinary,
   type E2ePaths,
   type E2eUrls,
+  type SafePathGuardOptions,
 } from './env';
 
 export {
@@ -17,6 +29,7 @@ export {
   readSseEvents,
   uniqueId,
   CleanupRegistry,
+  assertSafeCleanupRoot,
   snapshotSecondBrainFiles,
   cleanupNewSecondBrainFiles,
   type ApiResponse,

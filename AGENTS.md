@@ -20,33 +20,23 @@ This repository is organized as a polyglot Rust + TypeScript + Python monorepo w
 
 ```text
 personal-life-manager/
-├── backend/                     # Unified multi-crate Rust 2024 Cargo workspace
-│   ├── crates/
-│   │   ├── domain/              # Pure models, UUIDv7 IDs, i64 cents, Decimal, utoipa OpenAPI schemas
-│   │   ├── life-ops/            # SQLx (PostgreSQL 16 + pgvector) repos & Life Ops engines (03, 07-11, Auth, Sync)
-│   │   ├── intelligence/        # hermes gateway SSE/runs client, rmcp /mcp server, Knights runner, Vault watcher
-│   │   └── server/              # Axum HTTP/SSE binary (:8080), /api/*, /mcp, and ServeDir over apps/web/dist
-│   └── migrations/              # SQLx PostgreSQL 16 + pgvector schema & seed migrations
-├── packages/
-│   ├── api-client/              # @hermes/api-client — OpenAPI 3.1 generated TypeScript SDK & TanStack Query hooks
-│   └── ui/                      # @hermes/ui — REF-02 0px Tactical FUI design system, charts, HUD loaders & sprites
-├── apps/
-│   ├── web/                     # @hermes/web — 100% client-rendered Vite + React 19 Web SPA (-> apps/web/dist)
-│   └── mobile/                  # @hermes/mobile — Capacitor + Vite React CSR offline-first SQLite companion app
+├── life-manager/                # Complete Life Manager app, code, tests, and v1.0 specs
+│   ├── backend/                 # Unified multi-crate Rust 2024 Cargo workspace (domain, life-ops, intelligence, server)
+│   ├── packages/                # @hermes/api-client (OpenAPI 3.1 SDK) & @hermes/ui (REF-02 Tactical FUI)
+│   ├── apps/                    # @hermes/web (Vite + React 19 SPA) & @hermes/mobile (Capacitor SQLite companion)
+│   ├── e2e/                     # Playwright E2E test suite & harness
+│   ├── systems-requirements/    # Authoritative v1.0 specifications (01-12) and visual reference atlas (REF-01..14)
+│   ├── infra-deploy/            # Multi-stage Dockerfile, Compose files, and initdb/01-pgvector.sql
+│   ├── mise.toml                # Toolchain manager config (Rust, Node 24, pnpm 10.34.7)
+│   ├── package.json             # pnpm@10.34.7 workspace manifest
+│   └── pnpm-workspace.yaml      # Workspace globs (apps/*, packages/*)
 ├── crawlers/                    # Python data collectors (youtube-lists, youtube-ai, youtube-clean)
-├── infra-deploy/                # Multi-stage Dockerfile, Compose files, and initdb/01-pgvector.sql
 ├── scripts/                     # Vault & Dropbox sync scripts (download_brain.sh, sync_dropbox.sh, git-hooks/)
 ├── sub-systems/                 # Standalone bots and calculation tools (auto-players, satisfatory-plan)
-├── systems-requirements/        # Authoritative v1.0 specifications (01-12) and visual reference atlas (REF-01..14)
 ├── documentation/               # High-level architecture and CODE methodology guides
 ├── data/                        # [GITIGNORED — ZERO TRACKED FILES] Local private data
-│   ├── second-brain/            # Clone of the Obsidian Second Brain Markdown vault
-│   ├── knowledge-data/          # Crawler Markdown notes (e.g. lists/youtube/)
-│   └── database/                # Crawler SQLite databases (e.g. youtube-lists.sqlite)
-├── mise.toml                    # Toolchain manager config (Rust, Node 24, pnpm 10.34.7)
-├── package.json                 # Root pnpm@10.34.7 workspace manifest
-├── pnpm-workspace.yaml          # Workspace globs (apps/*, packages/*)
-└── podman-compose.yml           # Root orchestrator (postgres, redis, hermes-server)
+├── docker-compose.yml           # Root Docker Compose orchestrator (postgres, redis, hermes-server)
+└── podman-compose.yml           # Root Podman Compose orchestrator (postgres, redis, hermes-server)
 ```
 
 ### Module Responsibilities & Tech Stacks

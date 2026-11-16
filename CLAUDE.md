@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides concise operational guidance when working in this repository. [AGENTS.md](./AGENTS.md) is the authoritative contributor guide, and [systems-requirements/README.md](./systems-requirements/README.md) holds the v1.0 specifications and visual reference atlas (`REF-01`–`REF-14`).
+This file provides concise operational guidance when working in this repository. [AGENTS.md](./AGENTS.md) is the authoritative contributor guide, and [life-manager/systems-requirements/README.md](./life-manager/systems-requirements/README.md) holds the v1.0 specifications and visual reference atlas (`REF-01`–`REF-14`).
 
 ## What this repo is
 

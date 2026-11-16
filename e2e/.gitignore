@@ -1,8 +1,0 @@
-node_modules/
-playwright-report/
-test-results/
-.tmp/
-.pnpm-store/
-blob-report/
-playwright/.cache/
-*.tsbuildinfo

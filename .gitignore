@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!life-manager/infra-deploy/.env.example
 
 # Agent / Teamwork workspace metadata
 .agents/
@@ -16,7 +17,9 @@
 
 # Node / pnpm workspace dependencies & caches
 node_modules/
+**/node_modules/
 .pnpm-store/
+**/.pnpm-store/
 *.tsbuildinfo
 .vite/
 coverage/
@@ -30,12 +33,22 @@ apps/*/dist/
 packages/*/dist/
 apps/mobile/android/
 apps/mobile/ios/
+life-manager/apps/web/dist/
+life-manager/apps/mobile/dist/
+life-manager/apps/*/dist/
+life-manager/packages/*/dist/
+life-manager/apps/mobile/android/
+life-manager/apps/mobile/ios/
 
 # E2E isolated workspace artifacts (e2e/ source remains trackable)
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
 e2e/dist/
+life-manager/e2e/node_modules/
+life-manager/e2e/test-results/
+life-manager/e2e/playwright-report/
+life-manager/e2e/dist/
 
 # Python crawler virtualenvs & bytecode
 __pycache__/
@@ -74,4 +87,3 @@ credentials*.json
 *.db-wal
 *.db-shm
 *.bundle
-

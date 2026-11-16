@@ -55,12 +55,12 @@ flowchart TD
 
 | Module | Description | Quick Link |
 | :--- | :--- | :--- |
-| **`backend/`** | Multi-crate Rust 2024 workspace (`domain`, `life-ops`, `intelligence`, `server`) serving `/api/*`, `/mcp`, and `apps/web/dist`. | [Contributor Guide](./AGENTS.md) |
-| **`packages/`** | `@hermes/ui` (`REF-02` `0px` Tactical FUI components, HUD loaders, charts, pixel-art sprites) & `@hermes/api-client` (OpenAPI 3.1 SDK). | [Architecture Spec](./systems-requirements/01-architecture-and-tech-stack.md) |
-| **`apps/web/`** | 100% client-rendered Vite + React 19 Web SPA across Modules `03`–`11` (`/dashboard`, `/monitor`, `/hermes`, `/agents`, `/todos`, `/routines`, `/goals`, `/courses`, `/finance`). | [System Specs](./systems-requirements/README.md) |
-| **`apps/mobile/`** | Capacitor + Vite React CSR offline-first mobile companion scoped strictly to `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG`. | [Companion Spec](./systems-requirements/02-companion-app.md) |
+| **`life-manager/backend/`** | Multi-crate Rust 2024 workspace (`domain`, `life-ops`, `intelligence`, `server`) serving `/api/*`, `/mcp`, and `apps/web/dist`. | [Contributor Guide](./AGENTS.md) |
+| **`life-manager/packages/`** | `@hermes/ui` (`REF-02` `0px` Tactical FUI components, HUD loaders, charts, pixel-art sprites) & `@hermes/api-client` (OpenAPI 3.1 SDK). | [Architecture Spec](./life-manager/systems-requirements/01-architecture-and-tech-stack.md) |
+| **`life-manager/apps/web/`** | 100% client-rendered Vite + React 19 Web SPA across Modules `03`–`11` (`/dashboard`, `/monitor`, `/hermes`, `/agents`, `/todos`, `/routines`, `/goals`, `/courses`, `/finance`). | [System Specs](./life-manager/systems-requirements/README.md) |
+| **`life-manager/apps/mobile/`** | Capacitor + Vite React CSR offline-first mobile companion scoped strictly to `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG`. | [Companion Spec](./life-manager/systems-requirements/02-companion-app.md) |
 | **`crawlers/`** | Python ingestion tools (`youtube-lists`, `youtube-ai`, `youtube-clean`) and standardized crawler templates. | [Explore Crawlers](./crawlers/README.md) |
-| **`infra-deploy/`** | Multi-stage `Dockerfile`, Podman/Docker Compose manifests (`pgvector:pg16`, `redis:7-alpine`, `hermes-server`), and `initdb/`. | [View Deploy Specs](./infra-deploy/README.md) |
+| **`life-manager/infra-deploy/`** | Multi-stage `Dockerfile`, Podman/Docker Compose manifests (`pgvector:pg16`, `redis:7-alpine`, `hermes-server`), and `initdb/`. | [View Deploy Specs](./life-manager/infra-deploy/README.md) |
 | **`scripts/`** | Automation helpers for Obsidian vault sync (`download_brain.sh`), Dropbox rclone sync (`sync_dropbox.sh`), and git secret hooks. | [Explore Scripts](./scripts/README.md) |
 | **`sub-systems/`** | Standalone sub-systems, automated bots, and simulation tools (`auto-players`, `satisfatory-plan`). | [Explore Sub-Systems](./sub-systems/README.md) |
 | **`documentation/`** | Conceptual architecture overview and Second Brain CODE methodology notes. | [View Docs](./documentation/README.md) |
@@ -99,7 +99,7 @@ Open **`http://localhost:5173`** during active UI development (proxies `/api` an
 ---
 
 ## 📖 Key Documentation
-- [Authoritative v1.0 Specifications & Visual Atlas](./systems-requirements/README.md)
+- [Authoritative v1.0 Specifications & Visual Atlas](./life-manager/systems-requirements/README.md)
 - [Agent & Contributor Guide (`AGENTS.md`)](./AGENTS.md)
 - [Claude Operational Summary (`CLAUDE.md`)](./CLAUDE.md)
 - [System Architecture Overview](./documentation/architecture.md)

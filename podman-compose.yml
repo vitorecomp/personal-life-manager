@@ -16,7 +16,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infra-deploy/initdb/01-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+      - ./life-manager/infra-deploy/initdb/01-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
     healthcheck:
       test: "pg_isready -U ${POSTGRES_USER:-hermes} -d ${POSTGRES_DB:-hermes_os}"
       interval: 5s
@@ -47,7 +47,7 @@ services:
   # ===========================================================================
   hermes-server:
     build:
-      context: .
+      context: ./life-manager
       dockerfile: infra-deploy/Dockerfile
     image: localhost/hermes-os-server:latest
     container_name: hermes_os_server

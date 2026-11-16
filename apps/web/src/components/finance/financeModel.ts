@@ -828,3 +828,463 @@ export function formatFireDurationLabel(
   }
   return '0Y 0M';
 }
+
+export type CurrencyCode = AssetCurrency;
+
+export type StockCycleSelectionMode = 'SINGLE' | 'COMBINED';
+
+export type StockCycleWeightingMode = 'PORTFOLIO_WEIGHTED' | 'EQUAL_WEIGHT' | 'INDEX_100';
+
+export interface StockCycleMetrics {
+  symbolLabel: string;
+  nameLabel: string;
+  selectedCount: number;
+  isCombined: boolean;
+  currency: AssetCurrency;
+  livePriceCents: number;
+  periodOpenCents: number;
+  periodCloseCents: number;
+  periodHighCents: number;
+  periodLowCents: number;
+  periodChangePct: number;
+  totalVolume: number;
+  cyclePhase: 'ACCUMULATION' | 'MARKUP' | 'DISTRIBUTION' | 'MARKDOWN';
+  quoteSource: 'live' | 'cached';
+}
+
+export interface CombineCandlesInput {
+  selectedAssets: PortfolioAsset[];
+  candlesBySymbol?: Record<string, CandlestickBarDto[]>;
+  rangeKey?: CandleRangeKey;
+  baseCurrency?: AssetCurrency;
+  fxUsdBrl?: number;
+  weightingMode?: StockCycleWeightingMode;
+}
+
+/**
+ * Converts integer cents between BRL and USD using fxUsdBrl (fallback 5.0).
+ */
+export function convertCurrencyCents(
+  amountCents: unknown,
+  from: AssetCurrency,
+  to: AssetCurrency,
+  fxUsdBrl: unknown = 5.0,
+): number {
+  const cents = safeIntCents(amountCents, 0);
+  const fromNorm = normalizeAssetCurrency(from);
+  const toNorm = normalizeAssetCurrency(to);
+  if (fromNorm === toNorm) return cents;
+  const fx = Math.max(0.01, safeFiniteNumber(fxUsdBrl, 5.0));
+  if (fromNorm === 'USD' && toNorm === 'BRL') {
+    return Math.round(cents * fx);
+  }
+  return Math.round(cents / fx);
+}
+
+/**
+ * Deterministic 6-stock B3 + US fallback roster when `/api/finance/assets` is empty.
+ */
+export const DEFAULT_STOCK_CYCLE_ASSETS: PortfolioAsset[] = [
+  normalizePortfolioAsset({
+    id: 'stock-cycle-seed-petr4',
+    symbol: 'PETR4',
+    name: 'Petrobras PN',
+    asset_class: 'br_equity',
+    currency: 'BRL',
+    in_portfolio: true,
+    quantity: '200',
+    avg_cost_cents: 3450,
+    current_price_cents: 3842,
+    previous_close_cents: 3790,
+    dividend_yield_pct: '11.40',
+    target_weight_pct: '20.00',
+    quote_source: 'seeded',
+    thesis_md: 'Deep-water pre-salt cash cow with low lifting cost.',
+  }),
+  normalizePortfolioAsset({
+    id: 'stock-cycle-seed-wege3',
+    symbol: 'WEGE3',
+    name: 'WEG S.A. ON',
+    asset_class: 'br_equity',
+    currency: 'BRL',
+    in_portfolio: true,
+    quantity: '150',
+    avg_cost_cents: 3680,
+    current_price_cents: 4185,
+    previous_close_cents: 4110,
+    dividend_yield_pct: '1.85',
+    target_weight_pct: '20.00',
+    quote_source: 'seeded',
+    thesis_md: 'Global industrial electrification & grid transformer compounder.',
+  }),
+  normalizePortfolioAsset({
+    id: 'stock-cycle-seed-vale3',
+    symbol: 'VALE3',
+    name: 'Vale S.A. ON',
+    asset_class: 'br_equity',
+    currency: 'BRL',
+    in_portfolio: true,
+    quantity: '120',
+    avg_cost_cents: 6050,
+    current_price_cents: 6290,
+    previous_close_cents: 6215,
+    dividend_yield_pct: '8.20',
+    target_weight_pct: '15.00',
+    quote_source: 'seeded',
+    thesis_md: 'High-grade Carajas iron ore & energy transition metals.',
+  }),
+  normalizePortfolioAsset({
+    id: 'stock-cycle-seed-itub4',
+    symbol: 'ITUB4',
+    name: 'Itau Unibanco PN',
+    asset_class: 'br_equity',
+    currency: 'BRL',
+    in_portfolio: true,
+    quantity: '250',
+    avg_cost_cents: 3100,
+    current_price_cents: 3490,
+    previous_close_cents: 3440,
+    dividend_yield_pct: '6.90',
+    target_weight_pct: '15.00',
+    quote_source: 'seeded',
+    thesis_md: 'Premier Latin American ROE banking franchise.',
+  }),
+  normalizePortfolioAsset({
+    id: 'stock-cycle-seed-voo',
+    symbol: 'VOO',
+    name: 'Vanguard S&P 500 ETF',
+    asset_class: 'global_etf',
+    currency: 'USD',
+    in_portfolio: true,
+    quantity: '12',
+    avg_cost_cents: 47500,
+    current_price_cents: 52480,
+    previous_close_cents: 52100,
+    dividend_yield_pct: '1.35',
+    target_weight_pct: '18.00',
+    quote_source: 'seeded',
+    thesis_md: 'Core USD S&P 500 equity anchor.',
+  }),
+  normalizePortfolioAsset({
+    id: 'stock-cycle-seed-nvda',
+    symbol: 'NVDA',
+    name: 'NVIDIA Corp',
+    asset_class: 'us_equity',
+    currency: 'USD',
+    in_portfolio: true,
+    quantity: '25',
+    avg_cost_cents: 11200,
+    current_price_cents: 13860,
+    previous_close_cents: 13590,
+    dividend_yield_pct: '0.03',
+    target_weight_pct: '12.00',
+    quote_source: 'seeded',
+    thesis_md: 'Accelerated compute & AI datacenter interconnect leader.',
+  }),
+];
+
+/**
+ * Resolves the user's stock list from `/api/finance/assets`, falling back to
+ * `DEFAULT_STOCK_CYCLE_ASSETS` when the database has no seeded assets yet.
+ */
+export function resolveStockCycleAssets(
+  apiAssets: PortfolioAsset[] | undefined | null,
+): { assets: PortfolioAsset[]; isFallbackSeed: boolean } {
+  if (Array.isArray(apiAssets) && apiAssets.length > 0) {
+    return { assets: apiAssets, isFallbackSeed: false };
+  }
+  return { assets: DEFAULT_STOCK_CYCLE_ASSETS, isFallbackSeed: true };
+}
+
+/**
+ * Client-side deterministic OHLCV candle synthesizer mirroring
+ * `backend/crates/life-ops/src/finance.rs:1411-1470`.
+ */
+export function synthesizeClientCandles(
+  asset: Pick<PortfolioAsset, 'symbol' | 'current_price_cents'> &
+    Partial<Pick<PortfolioAsset, 'quote_source'>>,
+  rangeKey: CandleRangeKey = '1M',
+  anchorTimestampMs = 1763262000000,
+): AssetCandlesResponse {
+  const normalizedRange = normalizeCandleRange(rangeKey);
+  const config: Record<CandleRangeKey, { steps: number; stepMs: number }> = {
+    '1D': { steps: 24, stepMs: 3600 * 1000 },
+    '7D': { steps: 7, stepMs: 24 * 3600 * 1000 },
+    '1M': { steps: 30, stepMs: 24 * 3600 * 1000 },
+    '1Y': { steps: 52, stepMs: 7 * 24 * 3600 * 1000 },
+    'ALL': { steps: 60, stepMs: 7 * 24 * 3600 * 1000 },
+  };
+
+  const { steps, stepMs } = config[normalizedRange];
+  const base = Math.max(1000, safeIntCents(asset?.current_price_cents, 1000));
+  const symbolStr = String(asset?.symbol || 'ASSET').trim().toUpperCase() || 'ASSET';
+  const seed = Array.from(symbolStr).reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+
+  const bars: CandlestickBarDto[] = [];
+  let prevClose = Math.max(100, Math.round((base * 92) / 100));
+
+  for (let idx = 0; idx < steps; idx++) {
+    const ts = new Date(anchorTimestampMs - (steps - idx) * stepMs).toISOString();
+    const wave = Math.sin((idx + seed) * 0.45);
+    const trend = idx / steps;
+    const targetClose =
+      idx + 1 === steps
+        ? base
+        : Math.max(100, Math.round(base * (0.91 + 0.09 * trend + 0.025 * wave)));
+
+    const open = prevClose;
+    const close = targetClose;
+    const spread = Math.max(10, Math.floor(base / 90) + ((idx + seed) % 7) * 5);
+    const high = Math.max(open, close) + spread;
+    const low = Math.max(50, Math.min(open, close) - spread);
+    const volume = 10_000 + ((idx * 1_733 + seed * 31) % 85_000);
+
+    bars.push({
+      timestamp: ts,
+      open_cents: open,
+      high_cents: Math.max(high, open, close),
+      low_cents: Math.max(1, Math.min(low, open, close)),
+      close_cents: close,
+      volume,
+    });
+
+    prevClose = close;
+  }
+
+  return {
+    symbol: symbolStr,
+    range_key: normalizedRange,
+    quote_source: String(asset?.quote_source ?? 'seeded').trim() || 'seeded',
+    candles: bars,
+  };
+}
+
+/**
+ * Computes single-stock or multi-stock combined OHLCV bars, chartData, and cycle metrics.
+ */
+export function computeCombinedCandles(input: CombineCandlesInput): {
+  bars: CandlestickBarDto[];
+  chartData: CandleDatum[];
+  metrics: StockCycleMetrics;
+} {
+  const selectedAssets = Array.isArray(input?.selectedAssets)
+    ? input.selectedAssets.filter((a): a is PortfolioAsset => Boolean(a && a.symbol))
+    : [];
+  const rangeKey = normalizeCandleRange(input?.rangeKey ?? '1M');
+  const baseCurrency = normalizeAssetCurrency(input?.baseCurrency ?? 'BRL');
+  const fxUsdBrl = Math.max(0.01, safeFiniteNumber(input?.fxUsdBrl, 5.0));
+  const weightingMode: StockCycleWeightingMode =
+    input?.weightingMode === 'EQUAL_WEIGHT' ||
+    input?.weightingMode === 'INDEX_100' ||
+    input?.weightingMode === 'PORTFOLIO_WEIGHTED'
+      ? input.weightingMode
+      : 'PORTFOLIO_WEIGHTED';
+  const candlesBySymbol = input?.candlesBySymbol ?? {};
+
+  if (selectedAssets.length === 0) {
+    return {
+      bars: [],
+      chartData: [],
+      metrics: {
+        symbolLabel: 'NO_ASSETS',
+        nameLabel: 'No stocks selected',
+        selectedCount: 0,
+        isCombined: false,
+        currency: baseCurrency,
+        livePriceCents: 0,
+        periodOpenCents: 0,
+        periodCloseCents: 0,
+        periodHighCents: 0,
+        periodLowCents: 0,
+        periodChangePct: 0,
+        totalVolume: 0,
+        cyclePhase: 'ACCUMULATION',
+        quoteSource: 'cached',
+      },
+    };
+  }
+
+  const resolvedSeries = selectedAssets.map((asset) => {
+    const provided = candlesBySymbol[asset.symbol];
+    const rawBars =
+      Array.isArray(provided) && provided.length > 0
+        ? provided
+        : synthesizeClientCandles(asset, rangeKey).candles;
+    const normalizedBars = rawBars.map((b) => {
+      const openCents = Math.max(1, safeIntCents(b.open_cents, 100));
+      const closeCents = Math.max(1, safeIntCents(b.close_cents, openCents));
+      const highRaw = Math.max(1, safeIntCents(b.high_cents, Math.max(openCents, closeCents)));
+      const lowRaw = Math.max(1, safeIntCents(b.low_cents, Math.min(openCents, closeCents)));
+      return {
+        timestamp: String(b.timestamp || ''),
+        open_cents: openCents,
+        high_cents: Math.max(highRaw, openCents, closeCents),
+        low_cents: Math.max(1, Math.min(lowRaw, openCents, closeCents)),
+        close_cents: closeCents,
+        volume: Math.max(0, safeIntCents(b.volume, 0)),
+      };
+    });
+    return { asset, bars: normalizedBars };
+  });
+
+  const isSingleNative = selectedAssets.length === 1 && weightingMode !== 'INDEX_100';
+  let combinedBars: CandlestickBarDto[] = [];
+  let effectiveCurrency: AssetCurrency = baseCurrency;
+
+  if (isSingleNative && resolvedSeries[0]) {
+    const single = resolvedSeries[0];
+    effectiveCurrency = normalizeAssetCurrency(single.asset.currency);
+    combinedBars = single.bars;
+  } else {
+    effectiveCurrency = baseCurrency;
+    const minLen = Math.min(...resolvedSeries.map((s) => s.bars.length));
+    const alignedSeries = resolvedSeries.map((s) => ({
+      asset: s.asset,
+      bars: s.bars.slice(s.bars.length - minLen),
+    }));
+
+    const quantities = alignedSeries.map((s) =>
+      Math.max(0, safeFiniteNumber(s.asset.quantity, 0)),
+    );
+    const totalQty = quantities.reduce((acc, q) => acc + q, 0);
+    const count = alignedSeries.length;
+
+    const weights = alignedSeries.map((_, idx) => {
+      if (weightingMode === 'PORTFOLIO_WEIGHTED' && totalQty > 0) {
+        return (quantities[idx] ?? 0) / totalQty;
+      }
+      return 1 / count;
+    });
+
+    for (let t = 0; t < minLen; t++) {
+      let openAcc = 0;
+      let closeAcc = 0;
+      let highAcc = 0;
+      let lowAcc = 0;
+      let volAcc = 0;
+      const timestamp = alignedSeries[0]?.bars[t]?.timestamp ?? '';
+
+      for (let k = 0; k < count; k++) {
+        const series = alignedSeries[k]!;
+        const bar = series.bars[t]!;
+        const w = weights[k] ?? 1 / count;
+
+        if (weightingMode === 'INDEX_100') {
+          const baseOpen = Math.max(1, series.bars[0]?.open_cents ?? 1000);
+          const scale = 10000 / baseOpen;
+          openAcc += w * bar.open_cents * scale;
+          closeAcc += w * bar.close_cents * scale;
+          highAcc += w * bar.high_cents * scale;
+          lowAcc += w * bar.low_cents * scale;
+        } else {
+          const openConv = convertCurrencyCents(
+            bar.open_cents,
+            series.asset.currency,
+            baseCurrency,
+            fxUsdBrl,
+          );
+          const closeConv = convertCurrencyCents(
+            bar.close_cents,
+            series.asset.currency,
+            baseCurrency,
+            fxUsdBrl,
+          );
+          const highConv = convertCurrencyCents(
+            bar.high_cents,
+            series.asset.currency,
+            baseCurrency,
+            fxUsdBrl,
+          );
+          const lowConv = convertCurrencyCents(
+            bar.low_cents,
+            series.asset.currency,
+            baseCurrency,
+            fxUsdBrl,
+          );
+          openAcc += w * openConv;
+          closeAcc += w * closeConv;
+          highAcc += w * highConv;
+          lowAcc += w * lowConv;
+        }
+        volAcc += bar.volume;
+      }
+
+      const openCents = Math.max(1, Math.round(openAcc));
+      const closeCents = Math.max(1, Math.round(closeAcc));
+      const highRaw = Math.max(1, Math.round(highAcc));
+      const lowRaw = Math.max(1, Math.round(lowAcc));
+      const highCents = Math.max(highRaw, openCents, closeCents);
+      const lowCents = Math.max(1, Math.min(lowRaw, openCents, closeCents));
+
+      combinedBars.push({
+        timestamp,
+        open_cents: openCents,
+        high_cents: highCents,
+        low_cents: lowCents,
+        close_cents: closeCents,
+        volume: Math.max(0, Math.round(volAcc)),
+      });
+    }
+  }
+
+  const chartData = candlesToChartData(combinedBars);
+  const firstBar = combinedBars[0];
+  const lastBar = combinedBars[combinedBars.length - 1];
+  const periodOpenCents = firstBar?.open_cents ?? 0;
+  const periodCloseCents = lastBar?.close_cents ?? 0;
+  const periodHighCents =
+    combinedBars.length > 0 ? Math.max(...combinedBars.map((b) => b.high_cents)) : 0;
+  const periodLowCents =
+    combinedBars.length > 0 ? Math.min(...combinedBars.map((b) => b.low_cents)) : 0;
+  const totalVolume = combinedBars.reduce((acc, b) => acc + b.volume, 0);
+  const periodChangePct =
+    periodOpenCents > 0
+      ? Number((((periodCloseCents - periodOpenCents) / periodOpenCents) * 100).toFixed(2))
+      : 0;
+
+  let cyclePhase: StockCycleMetrics['cyclePhase'] = 'ACCUMULATION';
+  if (periodChangePct >= 3.0) {
+    cyclePhase = 'MARKUP';
+  } else if (periodChangePct <= -3.0) {
+    cyclePhase = 'MARKDOWN';
+  } else if (periodChangePct < 0) {
+    cyclePhase = 'DISTRIBUTION';
+  }
+
+  const symbols = selectedAssets.map((a) => a.symbol);
+  const isCombined = selectedAssets.length > 1;
+  const symbolLabel = !isCombined
+    ? symbols[0] || 'NO_ASSETS'
+    : symbols.length <= 3
+      ? `COMBINED (${symbols.join('+')})`
+      : `COMBINED // ${symbols.length} STOCKS`;
+  const nameLabel = !isCombined
+    ? selectedAssets[0]?.name || symbols[0] || ''
+    : `${symbols.length} STOCKS COMBINED CYCLE (${symbols.join(' · ')})`;
+
+  const allLive = selectedAssets.every((a) => !isCachedOrManualQuoteSource(a.quote_source));
+
+  return {
+    bars: combinedBars,
+    chartData,
+    metrics: {
+      symbolLabel,
+      nameLabel,
+      selectedCount: selectedAssets.length,
+      isCombined,
+      currency: effectiveCurrency,
+      livePriceCents: periodCloseCents,
+      periodOpenCents,
+      periodCloseCents,
+      periodHighCents,
+      periodLowCents,
+      periodChangePct,
+      totalVolume,
+      cyclePhase,
+      quoteSource: allLive ? 'live' : 'cached',
+    },
+  };
+}
+
+export const combineStockCandles = computeCombinedCandles;
+

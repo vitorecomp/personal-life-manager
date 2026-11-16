@@ -3,7 +3,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrivacyMaskProvider } from '@hermes/ui';
+import { FinanceView } from '../components/finance/FinanceView';
+import { StockCycleView } from '../components/finance/StockCycleView';
 import { FinancePage } from './FinancePage';
+import { StockCyclePage } from './StockCyclePage';
 
 function renderFinancePage() {
   const queryClient = new QueryClient({
@@ -384,5 +387,69 @@ describe('FinancePage (/finance) — F32 Multi-Market Holdings, Waffle, Rebalanc
     await waitFor(() => {
       expect(document.body.textContent).toContain('6Y 6M');
     });
+  });
+
+  it('[F43/F44/M9] StockCycleView renders left stock list, switches individual stocks on the candlestick graph, and combines multiple selected stocks', async () => {
+    expect(FinanceView).toBe(FinancePage);
+    expect(StockCyclePage).toBe(StockCycleView);
+
+    const { candleUrlsRequested } = stubFinanceApiMocks();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <PrivacyMaskProvider storageKey={null}>
+          <StockCycleView />
+        </PrivacyMaskProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId('stock-cycle-page')).toBeTruthy();
+    expect(screen.getByTestId('stock-cycle-stock-list')).toBeTruthy();
+
+    // Wait for the 3 mocked stocks to render in the left stock list
+    await waitFor(() => {
+      expect(screen.getByTestId('stock-cycle-item-PETR4_T1')).toBeTruthy();
+      expect(screen.getByTestId('stock-cycle-item-VWRA_T1')).toBeTruthy();
+      expect(screen.getByTestId('stock-cycle-item-HGLG11_W')).toBeTruthy();
+    });
+
+    const chart = screen.getByTestId('candlestick-chart');
+    expect(chart.getAttribute('data-symbol')).toBe('PETR4_T1');
+
+    // Select an individual stock (VWRA_T1) from the left list -> candlestick chart updates to VWRA_T1
+    fireEvent.click(screen.getByTestId('stock-cycle-select-VWRA_T1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('candlestick-chart').getAttribute('data-symbol')).toBe('VWRA_T1');
+    });
+    expect(
+      candleUrlsRequested.some((u) =>
+        u.includes('/api/finance/assets/01963000-0000-7000-8000-00000000f002/candles?range=1M'),
+      ),
+    ).toBe(true);
+
+    // Toggle a second stock via checkbox to combine VWRA_T1 + PETR4_T1 -> combined candlestick chart renders
+    fireEvent.click(screen.getByTestId('stock-cycle-check-PETR4_T1'));
+    await waitFor(() => {
+      const symbolAttr =
+        screen.getByTestId('candlestick-chart').getAttribute('data-symbol') ?? '';
+      expect(symbolAttr).toContain('COMBINED');
+      expect(symbolAttr).toContain('PETR4_T1');
+      expect(symbolAttr).toContain('VWRA_T1');
+    });
+
+    // Click Combine All option -> combines all 3 stocks
+    fireEvent.click(screen.getByTestId('stock-cycle-combine-all-btn'));
+    await waitFor(() => {
+      const symbolAttr =
+        screen.getByTestId('candlestick-chart').getAttribute('data-symbol') ?? '';
+      expect(symbolAttr).toContain('COMBINED (PETR4_T1+VWRA_T1+HGLG11_W)');
+    });
+
+    // Verify candles are rendered inside SVG
+    const candleGs = container.querySelectorAll('[data-candle]');
+    expect(candleGs.length).toBeGreaterThan(0);
   });
 });

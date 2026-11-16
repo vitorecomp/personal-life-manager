@@ -11,6 +11,7 @@ import {
   UUID_RE,
 } from './api/client';
 import { PrivacyMaskProvider } from '@hermes/ui';
+import { FINANCE_SUB_ITEMS, NAV_ITEMS } from './components/shell/AppShell';
 import { RoomMonitorView } from './components/monitor/RoomMonitorView';
 import { WidgetRenderer } from './components/monitor/WidgetRenderer';
 import { useAppStore } from './store/appStore';
@@ -57,12 +58,29 @@ describe('HERMES // OS Web SPA — Sub-Milestone M4A (F23, F24, F27)', () => {
     vi.restoreAllMocks();
   });
 
-  it('[F23] renders CSR shell with SystemApertureLogo, MicroAnimIcon, and navigates across all 9 routes', async () => {
+  it('[F23] renders CSR shell with SystemApertureLogo, MicroAnimIcon, full-height left collapsible sidebar, and navigates across all 9 routes', async () => {
     render(<App initialPath="/dashboard" />);
 
-    expect(screen.getByTestId('hermes-web-shell')).toBeTruthy();
-    expect(screen.getByTestId('app-shell-sidebar')).toBeTruthy();
-    const sidebarNav = within(screen.getByTestId('app-shell-sidebar')).getByRole('navigation', {
+    const shell = screen.getByTestId('hermes-web-shell');
+    expect(shell).toBeTruthy();
+    expect(shell.style.flexDirection).toBe('row');
+
+    const sidebar = screen.getByTestId('app-shell-sidebar');
+    expect(sidebar).toBeTruthy();
+    expect(sidebar.getAttribute('data-position')).toBe('left');
+    expect(sidebar.getAttribute('data-collapsed')).toBe('false');
+    expect(sidebar.style.minHeight).toBe('100vh');
+
+    const collapseToggle = screen.getByTestId('sidebar-collapse-toggle');
+    fireEvent.click(collapseToggle);
+    expect(sidebar.getAttribute('data-collapsed')).toBe('true');
+    expect(sidebar.style.width).toBe('60px');
+
+    fireEvent.click(collapseToggle);
+    expect(sidebar.getAttribute('data-collapsed')).toBe('false');
+    expect(sidebar.style.width).toBe('216px');
+
+    const sidebarNav = within(sidebar).getByRole('navigation', {
       name: 'Primary Module Navigation',
     });
     expect(sidebarNav.style.flexDirection).toBe('column');
@@ -1002,14 +1020,17 @@ describe('HERMES // OS Web SPA — Sub-Milestone M4A (F23, F24, F27)', () => {
     expect(zeroCard.textContent).toContain('DEGRADED // HTTP ERR');
     expect(zeroCard.textContent).toContain('EXTRACTED_PTR_99');
 
+    // Enter Edit Deck mode -> Deck Options appear inside the Cards for Later sidebar
+    fireEvent.click(screen.getByTestId('toggle-edit-mode-btn'));
+    expect(screen.getByTestId('sidebar-deck-options')).toBeTruthy();
+
     // Reorder Deck A right -> ['deck-b', 'deck-a']
     fireEvent.click(screen.getByTestId('move-deck-right-btn'));
     await waitFor(() => {
       expect(reorderedIds).toEqual(['deck-b', 'deck-a']);
     });
 
-    // Edit Deck A title & cycle_seconds
-    fireEvent.click(screen.getByTestId('edit-deck-btn'));
+    // Edit Deck A title & cycle_seconds inside the sidebar's Deck Options form
     fireEvent.change(screen.getByTestId('edit-deck-title-input'), {
       target: { value: 'DECK_ALPHA_RENAMED' },
     });
@@ -1673,5 +1694,394 @@ describe('HERMES // OS Web SPA — Sub-Milestone M4A (F23, F24, F27)', () => {
     expect(screen.getByTestId('monitor-active-deck-title').textContent).toBe(
       'DECK_DELTA // QUATERNARY',
     );
+  });
+
+  it('[F37/F38/F39] supports Dashboard Edit Mode 2D grid width/height span controls, pointer resize handles, drag-and-drop card/cell arrangement, and Widget Gallery browsing & addition', async () => {
+    const deckId = '01932a00-0000-7000-8000-000000000201';
+    const putCalls: Array<{ widgetId: string; body: Record<string, any> }> = [];
+    const postWidgetCalls: Array<Record<string, any>> = [];
+    let createdSeq = 1;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (method === 'PUT' && url.includes(`/api/dashboards/${deckId}/widgets/`)) {
+        const widgetId = url.split('/widgets/')[1] || '';
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        putCalls.push({ widgetId, body });
+        return new Response(JSON.stringify({ id: widgetId, ...body }), { status: 200 });
+      }
+      if (method === 'POST' && url.endsWith(`/api/dashboards/${deckId}/widgets`)) {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        postWidgetCalls.push(body);
+        const createdId = `01932a00-0000-7000-8000-00000000c00${createdSeq++}`;
+        return new Response(
+          JSON.stringify({
+            id: createdId,
+            dashboard_id: deckId,
+            ...body,
+          }),
+          { status: 201 },
+        );
+      }
+      if (url.includes('/api/dashboards')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: deckId,
+              slug: 'tactical-ops',
+              title: 'DECK_01 // TACTICAL_OPS',
+              cycle_seconds: 60,
+              in_rotation: true,
+              sort_order: 1,
+              layout_cols: 12,
+              layout_rows: 8,
+              widgets: [
+                {
+                  id: 'w-1',
+                  dashboard_id: deckId,
+                  title: 'LIFE_TELEMETRY_INDEX',
+                  source_kind: 'builtin',
+                  renderer_kind: 'custom_module',
+                  grid_rect: { x: 0, y: 0, w: 4, h: 4 },
+                  source_config: { builtin_key: 'life_score' },
+                  sort_order: 1,
+                },
+                {
+                  id: 'w-2',
+                  dashboard_id: deckId,
+                  title: '24H_FOCUS_BARCODE',
+                  source_kind: 'builtin',
+                  renderer_kind: 'bar',
+                  grid_rect: { x: 4, y: 0, w: 4, h: 4 },
+                  source_config: { builtin_key: 'focus_barcode' },
+                  sort_order: 2,
+                },
+              ],
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    render(<App initialPath="/dashboard" />);
+    const card1 = await screen.findByTestId('widget-card-w-1');
+    const card2 = await screen.findByTestId('widget-card-w-2');
+    expect(card1.style.gridColumn).toBe('1 / span 4');
+    expect(card1.style.gridRow).toBe('1 / span 4');
+    expect(card2.style.gridColumn).toBe('5 / span 4');
+    expect(card2.style.gridRow).toBe('1 / span 4');
+
+    // Enter Edit Mode (does NOT auto-open Widget Gallery inline or render a second grid overlay)
+    fireEvent.click(screen.getByTestId('toggle-edit-mode-btn'));
+    expect(screen.getByTestId('dashboard-edit-banner')).toBeTruthy();
+    expect(screen.queryByTestId('dashboard-edit-grid-overlay')).toBeNull();
+    expect(screen.queryByTestId('widget-gallery')).toBeNull();
+
+    const dashboardRoot = screen.getByTestId('room-monitor-dashboard');
+    const mainGrid = screen.getByTestId('room-monitor-grid');
+    expect(dashboardRoot.getAttribute('data-edit-mode')).toBe('true');
+    expect(dashboardRoot.style.overflow).toBe('hidden');
+    expect(mainGrid.getAttribute('data-edit-mode')).toBe('true');
+    expect(mainGrid.style.overflow).toBe('hidden');
+    expect(mainGrid.style.gridTemplateRows).toBe('repeat(8, minmax(0, 1fr))');
+    expect(within(mainGrid).getByTestId('grid-cell-0-0')).toBeTruthy();
+    expect(within(mainGrid).getByTestId('grid-cell-11-7')).toBeTruthy();
+    expect(within(mainGrid).getByTestId('grid-cell-8-4')).toBeTruthy();
+
+    // R1: Width & Height Span Steppers (+W, +H), Select, Presets, and Pointer Resize Handle
+    fireEvent.click(screen.getByTestId('resize-widget-w-inc-w-1'));
+    fireEvent.click(screen.getByTestId('resize-widget-h-inc-w-1'));
+    expect(card1.getAttribute('data-grid-w')).toBe('5');
+    expect(card1.getAttribute('data-grid-h')).toBe('5');
+    expect(card1.style.gridColumn).toBe('1 / span 5');
+    expect(card1.style.gridRow).toBe('1 / span 5');
+
+    // Preset 6x4 on w-1 -> w-1 becomes 6x4 at (0,0) and colliding w-2 auto-packs to (6,0)
+    fireEvent.click(screen.getByTestId('widget-preset-6x4-w-1'));
+    expect(card1.getAttribute('data-grid-span')).toBe('6x4');
+    expect(card1.style.gridColumn).toBe('1 / span 6');
+    expect(card1.style.gridRow).toBe('1 / span 4');
+    expect(card2.style.gridColumn).toBe('7 / span 4');
+    expect(card2.style.gridRow).toBe('1 / span 4');
+
+    // Select W:5 and H:3 via dropdowns
+    fireEvent.change(screen.getByTestId('widget-select-w-w-1'), { target: { value: '5' } });
+    fireEvent.change(screen.getByTestId('widget-select-h-w-1'), { target: { value: '3' } });
+    expect(card1.getAttribute('data-grid-span')).toBe('5x3');
+
+    // Corner pointer drag resize handle (+1 col, +1 row via 80px step in JSDOM)
+    const cornerHandle = screen.getByTestId('resize-handle-w-1');
+    fireEvent.mouseDown(cornerHandle, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(window, { clientX: 180, clientY: 180 });
+    fireEvent.mouseUp(window, { clientX: 180, clientY: 180 });
+    expect(card1.getAttribute('data-grid-span')).toBe('6x4');
+
+    // R2: Drag-and-Drop onto a 2D grid cell highlights the full WxH footprint and blocks overlapping drops onto another card
+    const targetCell84 = within(mainGrid).getByTestId('grid-cell-8-4');
+    fireEvent.dragStart(card2);
+    fireEvent.dragOver(targetCell84);
+    const dropPreview = within(mainGrid).getByTestId('grid-drop-preview');
+    expect(dropPreview).toBeTruthy();
+    expect(dropPreview.getAttribute('data-drop-span')).toBe('4x4');
+    expect(dropPreview.getAttribute('data-drop-valid')).toBe('true');
+    expect(dropPreview.style.gridColumn).toBe('9 / span 4');
+    expect(dropPreview.style.gridRow).toBe('5 / span 4');
+    expect(within(mainGrid).getByTestId('grid-cell-8-4').getAttribute('data-highlighted')).toBe(
+      'true',
+    );
+    expect(within(mainGrid).getByTestId('grid-cell-11-7').getAttribute('data-highlighted')).toBe(
+      'true',
+    );
+    fireEvent.drop(targetCell84);
+    expect(card2.getAttribute('data-grid-x')).toBe('8');
+    expect(card2.getAttribute('data-grid-y')).toBe('4');
+    expect(card2.style.gridColumn).toBe('9 / span 4');
+    expect(card2.style.gridRow).toBe('5 / span 4');
+
+    // Attempting to drag card1 (6x4 at 0,0) onto card2 (4x4 at 8,4) highlights collision and blocks the drop
+    fireEvent.dragStart(card1);
+    fireEvent.dragOver(card2);
+    const blockedPreview = within(mainGrid).getByTestId('grid-drop-preview');
+    expect(blockedPreview.getAttribute('data-drop-span')).toBe('6x4');
+    expect(blockedPreview.getAttribute('data-drop-valid')).toBe('false');
+    fireEvent.drop(card2);
+    expect(card1.getAttribute('data-grid-x')).toBe('0');
+    expect(card1.getAttribute('data-grid-y')).toBe('0');
+    expect(card2.getAttribute('data-grid-x')).toBe('8');
+    expect(card2.getAttribute('data-grid-y')).toBe('4');
+
+    // R3: Widget Gallery Modal opening, filtering, span selection, 1-click Add to Grid, and modal dismissal
+    fireEvent.click(screen.getByTestId('open-widget-gallery-btn'));
+    const galleryModal = screen.getByTestId('widget-gallery');
+    expect(galleryModal).toBeTruthy();
+    expect(galleryModal.getAttribute('role')).toBe('dialog');
+    expect(galleryModal.getAttribute('aria-modal')).toBe('true');
+
+    fireEvent.click(screen.getByTestId('widget-gallery-category-infra_ai'));
+    fireEvent.change(screen.getByTestId('widget-gallery-search'), {
+      target: { value: 'prober' },
+    });
+    expect(screen.getByTestId('gallery-item-server_prober')).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId('gallery-size-server_prober'), {
+      target: { value: '6x4' },
+    });
+    fireEvent.click(screen.getByTestId('gallery-add-server_prober'));
+
+    await waitFor(() => {
+      expect(postWidgetCalls.length).toBeGreaterThanOrEqual(1);
+    });
+    expect(postWidgetCalls[0]!.title).toBe('SERVER_INFRASTRUCTURE_PROBER');
+    expect(postWidgetCalls[0]!.grid_rect.w).toBe(6);
+    expect(postWidgetCalls[0]!.grid_rect.h).toBe(4);
+    expect(putCalls.length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByTestId('close-widget-gallery-btn'));
+    expect(screen.queryByTestId('widget-gallery')).toBeNull();
+  });
+
+  it('[F40] supports Cancel Editing button revert, full-space non-scrolling grid, garbage delete in card option menu, and left Cards for Later sidebar', async () => {
+    const deckId = '01932a00-0000-7000-8000-000000000201';
+    const deleteCalls: string[] = [];
+    const postCalls: Array<Record<string, any>> = [];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (method === 'DELETE' && url.includes(`/api/dashboards/${deckId}/widgets/`)) {
+        const widgetId = url.split('/widgets/')[1] || '';
+        deleteCalls.push(widgetId);
+        return new Response(null, { status: 204 });
+      }
+      if (method === 'PUT' && url.includes(`/api/dashboards/${deckId}/widgets/`)) {
+        const widgetId = url.split('/widgets/')[1] || '';
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        return new Response(JSON.stringify({ id: widgetId, ...body }), { status: 200 });
+      }
+      if (method === 'POST' && url.endsWith(`/api/dashboards/${deckId}/widgets`)) {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        postCalls.push(body);
+        return new Response(
+          JSON.stringify({
+            id: `w-restored-${postCalls.length}`,
+            dashboard_id: deckId,
+            ...body,
+          }),
+          { status: 201 },
+        );
+      }
+      if (url.includes('/api/dashboards')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: deckId,
+              slug: 'tactical-ops',
+              title: 'DECK_01 // TACTICAL_OPS',
+              cycle_seconds: 60,
+              in_rotation: true,
+              sort_order: 1,
+              layout_cols: 12,
+              layout_rows: 8,
+              widgets: [
+                {
+                  id: 'w-alpha',
+                  dashboard_id: deckId,
+                  title: 'ALPHA_RADAR',
+                  source_kind: 'builtin',
+                  renderer_kind: 'custom_module',
+                  grid_rect: { x: 0, y: 0, w: 4, h: 4 },
+                  source_config: { builtin_key: 'life_score' },
+                  sort_order: 1,
+                },
+                {
+                  id: 'w-beta',
+                  dashboard_id: deckId,
+                  title: 'BETA_BARCODE',
+                  source_kind: 'builtin',
+                  renderer_kind: 'bar',
+                  grid_rect: { x: 4, y: 0, w: 4, h: 4 },
+                  source_config: { builtin_key: 'focus_barcode' },
+                  sort_order: 2,
+                },
+              ],
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    render(<App initialPath="/dashboard" />);
+    const alphaCard = await screen.findByTestId('widget-card-w-alpha');
+    expect(screen.getByTestId('widget-card-w-beta')).toBeTruthy();
+
+    // Verify full-space non-scrolling grid in View Mode and that Cards for Later sidebar is hidden outside Edit Mode
+    const mainGrid = screen.getByTestId('room-monitor-grid');
+    expect(mainGrid.style.height).toBe('100%');
+    expect(mainGrid.style.maxHeight).toBe('100%');
+    expect(mainGrid.style.overflow).toBe('hidden');
+    expect(mainGrid.style.gridTemplateRows).toBe('repeat(8, minmax(0, 1fr))');
+    expect(screen.queryByTestId('cards-for-later-sidebar')).toBeNull();
+
+    // Enter Edit Mode -> Cards for Later sidebar and Cancel Editing buttons appear
+    fireEvent.click(screen.getByTestId('toggle-edit-mode-btn'));
+    expect(screen.getByTestId('cancel-edit-mode-btn')).toBeTruthy();
+    expect(screen.getByTestId('banner-cancel-editing-btn')).toBeTruthy();
+    const stashSidebar = screen.getByTestId('cards-for-later-sidebar');
+    expect(stashSidebar.getAttribute('data-position')).toBe('left');
+    expect(screen.getByTestId('cards-for-later-count').textContent).toBe('0');
+
+    // Resize alphaCard, and click Cancel Editing -> reverts back to 4x4, exits Edit Mode, and hides Cards for Later sidebar
+    fireEvent.click(screen.getByTestId('resize-widget-w-inc-w-alpha'));
+    expect(alphaCard.getAttribute('data-grid-w')).toBe('5');
+
+    fireEvent.click(screen.getByTestId('cancel-edit-mode-btn'));
+    expect(screen.queryByTestId('dashboard-edit-banner')).toBeNull();
+    expect(screen.queryByTestId('cards-for-later-sidebar')).toBeNull();
+    expect(screen.getByTestId('widget-card-w-alpha').getAttribute('data-grid-w')).toBe('4');
+
+    // Re-enter Edit Mode to stash w-alpha into the left Cards for Later sidebar via the card option menu
+    fireEvent.click(screen.getByTestId('toggle-edit-mode-btn'));
+    expect(screen.getByTestId('cards-for-later-sidebar')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('widget-options-btn-w-alpha'));
+    const optionsMenu = screen.getByTestId('widget-options-menu-w-alpha');
+    expect(optionsMenu).toBeTruthy();
+    expect(screen.getByTestId('option-delete-widget-w-alpha')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('option-stash-widget-w-alpha'));
+    expect(screen.queryByTestId('widget-card-w-alpha')).toBeNull();
+    expect(screen.getByTestId('cards-for-later-count').textContent).toBe('1');
+
+    // Click the size badge on the stashed card to edit its size in the Cards for Later sidebar
+    const sizeBtn = document.querySelector(
+      '[data-testid^="stashed-card-size-btn-"]',
+    ) as HTMLElement | null;
+    expect(sizeBtn).toBeTruthy();
+    expect(sizeBtn!.textContent).toContain('4×4');
+    fireEvent.click(sizeBtn!);
+
+    const sizeEditor = document.querySelector(
+      '[data-testid^="stashed-card-size-editor-"]',
+    ) as HTMLElement | null;
+    expect(sizeEditor).toBeTruthy();
+
+    const preset6x4Btn = document.querySelector(
+      '[data-testid^="stashed-card-preset-6x4-"]',
+    ) as HTMLElement | null;
+    expect(preset6x4Btn).toBeTruthy();
+    fireEvent.click(preset6x4Btn!);
+    expect(sizeBtn!.textContent).toContain('6×4');
+
+    // Restore stashed card from the left sidebar back to the grid and verify its updated 6x4 size
+    const restoreBtn = document.querySelector(
+      '[data-testid^="restore-stashed-card-"]',
+    ) as HTMLElement | null;
+    expect(restoreBtn).toBeTruthy();
+    fireEvent.click(restoreBtn!);
+    expect(screen.getByTestId('cards-for-later-count').textContent).toBe('0');
+    const restoredCards = screen.getAllByTestId(/^widget-card-/);
+    expect(
+      restoredCards.some((el) => el.getAttribute('data-grid-span') === '6x4'),
+    ).toBe(true);
+
+    // Delete w-beta via the garbage button in the card option menu
+    fireEvent.click(screen.getByTestId('widget-options-btn-w-beta'));
+    fireEvent.click(screen.getByTestId('option-delete-widget-w-beta'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('widget-card-w-beta')).toBeNull();
+    });
+    expect(deleteCalls).toContain('w-beta');
+  });
+
+  it('[F43/F44/M9] exposes Finance sub-items ("Retirement" and "Stock Cycle") in NAV_ITEMS and sidebar, routing to FinanceView and StockCycleView', async () => {
+    const financeItem = NAV_ITEMS.find((item) => item.id === 'finance' || item.path === '/finance');
+    expect(financeItem).toBeTruthy();
+    expect(financeItem?.subItems).toEqual(FINANCE_SUB_ITEMS);
+    expect(financeItem?.subItems?.map((s) => s.label)).toEqual(['Retirement', 'Stock Cycle']);
+    expect(financeItem?.subItems?.map((s) => s.path)).toEqual([
+      '/finance/retirement',
+      '/finance/stock-cycle',
+    ]);
+
+    render(<App initialPath="/finance" />);
+    expect(await screen.findByTestId('finance-page')).toBeTruthy();
+
+    const subitemsGroup = screen.getByTestId('nav-subitems-finance');
+    expect(subitemsGroup).toBeTruthy();
+
+    const retirementLink = screen.getByTestId('nav-link-finance-retirement');
+    const stockCycleLink = screen.getByTestId('nav-link-finance-stock-cycle');
+    expect(retirementLink.textContent).toContain('Retirement');
+    expect(stockCycleLink.textContent).toContain('Stock Cycle');
+    expect(retirementLink.getAttribute('aria-current')).toBe('page');
+
+    // Navigate to Stock Cycle sub-item -> renders StockCycleView with left stock list and candlestick chart
+    fireEvent.click(stockCycleLink);
+    expect(await screen.findByTestId('stock-cycle-page')).toBeTruthy();
+    expect(screen.getByTestId('stock-cycle-stock-list')).toBeTruthy();
+    expect(screen.getByTestId('candlestick-chart')).toBeTruthy();
+    expect(stockCycleLink.getAttribute('aria-current')).toBe('page');
+
+    // Select an individual stock from the left list (WEGE3 from fallback seed)
+    const selectWege3 = await screen.findByTestId('stock-cycle-select-WEGE3');
+    fireEvent.click(selectWege3);
+    expect(screen.getByTestId('candlestick-chart').getAttribute('data-symbol')).toBe('WEGE3');
+
+    // Click combination option on the left -> updates candlestick chart to combined series
+    fireEvent.click(screen.getByTestId('stock-cycle-combine-option'));
+    expect(
+      screen.getByTestId('candlestick-chart').getAttribute('data-symbol') ?? '',
+    ).toContain('COMBINED');
+
+    // Navigate to Retirement sub-item -> renders existing FinanceView (finance-page)
+    fireEvent.click(retirementLink);
+    expect(await screen.findByTestId('finance-page')).toBeTruthy();
+    expect(retirementLink.getAttribute('aria-current')).toBe('page');
   });
 });

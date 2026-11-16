@@ -652,4 +652,103 @@ test.describe('Area C Tier 1 — Finance Operator, Waffle Allocation, Macro Spen
       }
     },
   );
+
+  test(
+    '[T1][F32] Finance sidebar sub-items ("Retirement" and "Stock Cycle") navigate between FinanceView and StockCycleView with single & combined candlestick graph',
+    { tag: ['@tier1', '@F23', '@F30', '@F32'] },
+    async ({ page }) => {
+      const api = createApiClient();
+      const cleanup = new CleanupRegistry();
+
+      try {
+        const symA = uniqueSymbol('CYCA');
+        const symB = uniqueSymbol('CYCB');
+
+        const assetA = unwrapEntity(
+          await api.post('/finance/assets', {
+            symbol: symA,
+            name: 'Cycle Alpha S.A.',
+            asset_class: 'br_equity',
+            currency: 'BRL',
+            in_portfolio: true,
+            quantity: '100.00',
+            avg_cost_cents: 3200,
+            current_price_cents: 3800,
+            target_weight_pct: '50.00',
+          }),
+          ['asset'],
+        );
+        const assetB = unwrapEntity(
+          await api.post('/finance/assets', {
+            symbol: symB,
+            name: 'Cycle Beta Corp',
+            asset_class: 'us_equity',
+            currency: 'USD',
+            in_portfolio: true,
+            quantity: '25.00',
+            avg_cost_cents: 11000,
+            current_price_cents: 13500,
+            target_weight_pct: '50.00',
+          }),
+          ['asset'],
+        );
+        cleanup.defer(async () => {
+          await api.delete(`/finance/assets/${assetB.id}`);
+          await api.delete(`/finance/assets/${assetA.id}`);
+        });
+
+        await waitForAppReady(page, `${E2E_URLS.baseUrl}/finance`);
+
+        // 1. Verify Finance sub-navigation items "Retirement" and "Stock Cycle" are visible in the left sidebar
+        const retirementLink = page.locator('[data-testid="nav-link-finance-retirement"]');
+        const stockCycleLink = page.locator('[data-testid="nav-link-finance-stock-cycle"]');
+        await expect(retirementLink).toBeVisible();
+        await expect(stockCycleLink).toBeVisible();
+        await expect(retirementLink).toContainText('Retirement');
+        await expect(stockCycleLink).toContainText('Stock Cycle');
+
+        // 2. Clicking "Retirement" renders the existing FinanceView (finance-page)
+        await retirementLink.click();
+        await expect(page.locator('[data-testid="finance-page"]')).toBeVisible();
+
+        // 3. Clicking "Stock Cycle" navigates to /finance/stock-cycle and renders StockCycleView
+        await stockCycleLink.click();
+        await expect(page.locator('[data-testid="stock-cycle-page"]')).toBeVisible();
+        await expect(page.locator('[data-testid="stock-cycle-stock-list"]')).toBeVisible();
+        const candleChart = page.locator('[data-testid="candlestick-chart"]');
+        await expect(candleChart).toBeVisible();
+
+        // 4. Select an individual stock from the left stock list -> candlestick chart updates to that stock
+        const selectBtnB = page.locator(`[data-testid="stock-cycle-select-${symB}"]`);
+        await expect(selectBtnB).toBeVisible();
+        await selectBtnB.click();
+        await expect(candleChart).toHaveAttribute('data-symbol', symB);
+
+        // 5. Select multiple stocks / combination option -> candlestick chart renders combined candlestick series
+        const checkBtnA = page.locator(`[data-testid="stock-cycle-check-${symA}"]`);
+        await expect(checkBtnA).toBeVisible();
+        await checkBtnA.click();
+        await expect(candleChart).toHaveAttribute('data-symbol', /COMBINED/);
+
+        // Also test the prominent combination option button
+        const combineOptionBtn = page.locator('[data-testid="stock-cycle-combine-option"]');
+        await expect(combineOptionBtn).toBeVisible();
+        await combineOptionBtn.click();
+        await expect(candleChart).toHaveAttribute('data-symbol', /COMBINED/);
+
+        // Verify candles exist in SVG and FUI rubric laws pass
+        const candleCount = await candleChart.locator('[data-candle]').count();
+        expect(candleCount).toBeGreaterThan(0);
+
+        const [radiusAudit, fontAudit] = await Promise.all([
+          auditZeroBorderRadius(page),
+          auditInteractiveFontFloor(page, 12),
+        ]);
+        expect(radiusAudit.violations).toEqual([]);
+        expect(fontAudit.violations).toEqual([]);
+      } finally {
+        await cleanup.runAll();
+      }
+    },
+  );
 });

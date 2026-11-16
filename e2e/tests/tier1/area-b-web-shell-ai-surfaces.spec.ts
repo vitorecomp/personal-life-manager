@@ -310,6 +310,7 @@ test.describe('Tier 1 — Area B: HUD Loaders, Web SPA Shell, Hermes, Knights & 
         expect(String(parsed.title ?? '')).toContain('Ship orbital telemetry');
 
         await modalInput.press('Enter');
+        await page.waitForTimeout(150);
 
         if (await modalInput.isVisible().catch(() => false)) {
           const submitBtn = page
@@ -317,8 +318,8 @@ test.describe('Tier 1 — Area B: HUD Loaders, Web SPA Shell, Hermes, Knights & 
               '[data-testid="quick-capture-submit"], [role="dialog"] button[type="submit"], [role="dialog"] button:has-text("Capture"), [role="dialog"] button:has-text("Create"), [role="dialog"] button:has-text("Add")',
             )
             .first();
-          if ((await submitBtn.count()) > 0) {
-            await submitBtn.click();
+          if (await submitBtn.isVisible().catch(() => false)) {
+            await submitBtn.click({ timeout: 2_000 }).catch(() => null);
           }
         }
 
@@ -1492,6 +1493,58 @@ test.describe('Tier 1 — Area B: HUD Loaders, Web SPA Shell, Hermes, Knights & 
         await mcp.closeSession();
         await cleanup.runAll();
       }
+    },
+  );
+
+  test(
+    '[T1][F23][F24] Dashboard Edit Layout toolbar, 12x8 2D grid space controls, drag-and-drop, and Widget Gallery preserve 0px FUI shell and never leak onto /monitor',
+    { tag: ['@tier1', '@F23', '@F24'] },
+    async ({ page }) => {
+      await waitForAppReady(page, `${E2E_URLS.baseUrl}/dashboard`);
+
+      await page.getByTestId('open-widget-gallery-btn').click();
+      const galleryModal = page.getByTestId('widget-gallery');
+      await expect(galleryModal).toBeVisible();
+      await expect(galleryModal).toHaveAttribute('role', 'dialog');
+      await expect(galleryModal).toHaveAttribute('aria-modal', 'true');
+      await expect(page.getByTestId('dashboard-edit-banner')).toBeVisible();
+      await expect(page.getByTestId('dashboard-edit-grid-overlay')).toHaveCount(0);
+
+      await page.getByTestId('widget-gallery-category-wealth').click();
+      await expect(page.getByTestId('gallery-item-portfolio_waffle')).toBeVisible();
+      await expect(page.getByTestId('gallery-item-fire_gauge')).toBeVisible();
+      await expect(page.getByTestId('gallery-item-monthly_surplus')).toBeVisible();
+
+      const radiusAudit = await auditZeroBorderRadius(page);
+      expect(radiusAudit.violations).toEqual([]);
+      const fontAudit = await auditInteractiveFontFloor(page, 12);
+      expect(fontAudit.violations).toEqual([]);
+
+      await page.getByTestId('close-widget-gallery-btn').click();
+      await expect(galleryModal).toHaveCount(0);
+
+      const scrollAudit = await page.evaluate(() => {
+        const doc = document.documentElement;
+        const body = document.body;
+        const dash = document.querySelector('[data-testid="room-monitor-dashboard"]') as HTMLElement | null;
+        const grid = document.querySelector('[data-testid="room-monitor-grid"]') as HTMLElement | null;
+        return {
+          docNoScroll: doc.scrollHeight <= doc.clientHeight,
+          bodyNoScroll: body.scrollHeight <= body.clientHeight,
+          dashNoScroll: dash ? dash.scrollHeight <= dash.clientHeight : true,
+          gridNoScroll: grid ? grid.scrollHeight <= grid.clientHeight : true,
+        };
+      });
+      expect(scrollAudit.docNoScroll).toBe(true);
+      expect(scrollAudit.bodyNoScroll).toBe(true);
+      expect(scrollAudit.dashNoScroll).toBe(true);
+      expect(scrollAudit.gridNoScroll).toBe(true);
+
+      // Ensure kiosk mode (/monitor) never renders edit mode chrome or widget gallery
+      await waitForAppReady(page, `${E2E_URLS.baseUrl}/monitor`);
+      await expect(page.getByTestId('dashboard-edit-banner')).toHaveCount(0);
+      await expect(page.getByTestId('widget-gallery')).toHaveCount(0);
+      await expect(page.getByTestId('dashboard-edit-grid-overlay')).toHaveCount(0);
     },
   );
 });

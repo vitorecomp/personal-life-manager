@@ -927,4 +927,219 @@ test.describe('Area A Tier 1 — Backend Room Monitor, Custom Widgets, Server Pr
       expect(monFont.violations).toEqual([]);
     },
   );
+
+  test(
+    '[T1][F24] Dashboard Edit Mode supports 2D grid width/height span controls, drag-and-drop layout arrangement, and Widget Gallery addition with 0px FUI compliance',
+    { tag: ['@tier1', '@F24'] },
+    async ({ page }) => {
+      await ensureStackReady();
+      const api = createApiClient();
+      const cleanup = new CleanupRegistry();
+
+      try {
+        const slug = `edit-grid-${uniqueId('deck')}`;
+        const createDeckRes = await api.post('/api/dashboards', {
+          slug,
+          title: `EDIT_GRID_${slug.toUpperCase()}`,
+          cycle_seconds: 60,
+          in_rotation: false,
+          layout_cols: 12,
+          layout_rows: 8,
+        });
+        expect([200, 201]).toContain(createDeckRes.status);
+        const deckId = String((createDeckRes.json as any)?.id || (createDeckRes.json as any)?.data?.id);
+        cleanup.defer(async () => {
+          await api.delete(`/api/dashboards/${deckId}`);
+        });
+
+        await waitForAppReady(page, `${E2E_URLS.baseUrl}/dashboard`);
+        const deckTab = page.getByTestId(`deck-tab-${slug}`);
+        await expect(deckTab).toBeVisible();
+        await deckTab.click();
+
+        // Enter Edit Mode (does NOT auto-open Widget Gallery inline or render dashboard-edit-grid-overlay)
+        const toggleEditBtn = page.getByTestId('toggle-edit-mode-btn');
+        await expect(toggleEditBtn).toBeVisible();
+        await toggleEditBtn.click();
+
+        await expect(page.getByTestId('dashboard-edit-banner')).toBeVisible();
+        await expect(page.getByTestId('dashboard-edit-grid-overlay')).toHaveCount(0);
+        await expect(page.getByTestId('widget-gallery')).toHaveCount(0);
+
+        const monitorGrid = page.getByTestId('room-monitor-grid');
+        await expect(monitorGrid).toHaveAttribute('data-edit-mode', 'true');
+        await expect(monitorGrid.getByTestId('grid-cell-0-0')).toBeVisible();
+        await expect(monitorGrid.getByTestId('grid-cell-11-7')).toBeVisible();
+
+        // R1: Open Widget Gallery Modal to add cards onto the 12x8 grid
+        await page.getByTestId('open-widget-gallery-btn').click();
+        const galleryDialog = page.getByTestId('widget-gallery');
+        await expect(galleryDialog).toBeVisible();
+        await expect(galleryDialog).toHaveAttribute('role', 'dialog');
+        await expect(galleryDialog).toHaveAttribute('aria-modal', 'true');
+
+        await page.getByTestId('gallery-size-life_radar').selectOption('4x4');
+        await page.getByTestId('gallery-add-life_radar').click();
+
+        await page.getByTestId('gallery-size-server_prober').selectOption('6x4');
+        await page.getByTestId('gallery-add-server_prober').click();
+
+        // Audit 0px border-radius and >=12px interactive font floor while Widget Gallery Modal is open
+        const modalRadius = await auditZeroBorderRadius(page);
+        expect(modalRadius.violations).toEqual([]);
+        const modalFont = await auditInteractiveFontFloor(page, 12);
+        expect(modalFont.violations).toEqual([]);
+
+        // Close Widget Gallery Modal before resizing and dragging directly on room-monitor-grid
+        await page.getByTestId('close-widget-gallery-btn').click();
+        await expect(galleryDialog).toHaveCount(0);
+
+        const cards = page.locator('[data-testid^="widget-card-"]');
+        await expect(cards).toHaveCount(2);
+
+        const firstCard = cards.first();
+        const firstWidgetId = await firstCard.getAttribute('data-widget-id');
+        expect(firstWidgetId).toBeTruthy();
+
+        // R2: Resize first card's width and height spans directly on room-monitor-grid
+        await expect(firstCard).toHaveAttribute('data-grid-span', '4x4');
+        await page.getByTestId(`resize-widget-w-inc-${firstWidgetId}`).click();
+        await page.getByTestId(`resize-widget-h-inc-${firstWidgetId}`).click();
+        await expect(firstCard).toHaveAttribute('data-grid-w', '5');
+        await expect(firstCard).toHaveAttribute('data-grid-h', '5');
+
+        await page.getByTestId(`widget-preset-6x4-${firstWidgetId}`).click();
+        await expect(firstCard).toHaveAttribute('data-grid-span', '6x4');
+
+        // R2: Drag-and-drop first card onto free 2D grid cell (6, 4) directly inside room-monitor-grid
+        const targetCell = monitorGrid.getByTestId('grid-cell-6-4');
+        await firstCard.dragTo(targetCell);
+        await expect(firstCard).toHaveAttribute('data-grid-x', '6');
+        await expect(firstCard).toHaveAttribute('data-grid-y', '4');
+
+        // Verify dropping firstCard onto the occupied second card is blocked (firstCard stays at 6,4)
+        const otherCard = cards.nth(1);
+        await firstCard.dragTo(otherCard);
+        await expect(firstCard).toHaveAttribute('data-grid-x', '6');
+        await expect(firstCard).toHaveAttribute('data-grid-y', '4');
+
+        // R3: Verify non-scrolling compact edit layout (scrollHeight <= clientHeight) and smaller card/grid sizing vs view mode
+        const editMetrics = await page.evaluate(() => {
+          const doc = document.documentElement;
+          const body = document.body;
+          const workspace = document.querySelector('[data-testid="app-shell-workspace"]') as HTMLElement | null;
+          const main = document.querySelector('[data-testid="app-shell-body"]') as HTMLElement | null;
+          const dash = document.querySelector('[data-testid="room-monitor-dashboard"]') as HTMLElement | null;
+          const grid = document.querySelector('[data-testid="room-monitor-grid"]') as HTMLElement | null;
+          const card = document.querySelector('[data-testid^="widget-card-"]') as HTMLElement | null;
+          return {
+            docNoScroll: doc.scrollHeight <= doc.clientHeight,
+            bodyNoScroll: body.scrollHeight <= body.clientHeight,
+            workspaceNoScroll: workspace ? workspace.scrollHeight <= workspace.clientHeight : true,
+            mainNoScroll: main ? main.scrollHeight <= main.clientHeight : true,
+            dashNoScroll: dash ? dash.scrollHeight <= dash.clientHeight : true,
+            gridNoScroll: grid ? grid.scrollHeight <= grid.clientHeight : true,
+            editCardHeight: card ? card.getBoundingClientRect().height : 0,
+            editGridHeight: grid ? grid.getBoundingClientRect().height : 0,
+          };
+        });
+        expect(editMetrics.docNoScroll).toBe(true);
+        expect(editMetrics.bodyNoScroll).toBe(true);
+        expect(editMetrics.workspaceNoScroll).toBe(true);
+        expect(editMetrics.mainNoScroll).toBe(true);
+        expect(editMetrics.dashNoScroll).toBe(true);
+        expect(editMetrics.gridNoScroll).toBe(true);
+
+        // Verify REF-02 0px border-radius and >=12px interactive font floor on compact Edit Mode grid
+        const editRadius = await auditZeroBorderRadius(page);
+        expect(editRadius.violations).toEqual([]);
+        const editFont = await auditInteractiveFontFloor(page, 12);
+        expect(editFont.violations).toEqual([]);
+
+        // Exit Edit Mode and verify cards/grid in Edit Mode were smaller than in normal View Mode and View Mode also fills available space without scroll
+        await toggleEditBtn.click();
+        const viewMetrics = await page.evaluate(() => {
+          const doc = document.documentElement;
+          const body = document.body;
+          const grid = document.querySelector('[data-testid="room-monitor-grid"]') as HTMLElement | null;
+          const card = document.querySelector('[data-testid^="widget-card-"]') as HTMLElement | null;
+          return {
+            docNoScroll: doc.scrollHeight <= doc.clientHeight,
+            bodyNoScroll: body.scrollHeight <= body.clientHeight,
+            gridNoScroll: grid ? grid.scrollHeight <= grid.clientHeight : true,
+            viewCardHeight: card ? card.getBoundingClientRect().height : 0,
+            viewGridHeight: grid ? grid.getBoundingClientRect().height : 0,
+          };
+        });
+        expect(viewMetrics.docNoScroll).toBe(true);
+        expect(viewMetrics.bodyNoScroll).toBe(true);
+        expect(viewMetrics.gridNoScroll).toBe(true);
+        expect(editMetrics.editCardHeight).toBeLessThan(viewMetrics.viewCardHeight);
+        expect(editMetrics.editGridHeight).toBeLessThan(viewMetrics.viewGridHeight);
+
+        // R4: Verify Cancel Editing button reverts layout edits made during an edit session and Cards for Later sidebar only appears when editing
+        await expect(page.getByTestId('cards-for-later-sidebar')).toHaveCount(0);
+        await toggleEditBtn.click();
+        await expect(page.getByTestId('cancel-edit-mode-btn')).toBeVisible();
+        await expect(page.getByTestId('banner-cancel-editing-btn')).toBeVisible();
+        await expect(page.getByTestId('cards-for-later-sidebar')).toBeVisible();
+        await page.getByTestId(`widget-preset-12x4-${firstWidgetId}`).click();
+        await expect(firstCard).toHaveAttribute('data-grid-span', '12x4');
+        await page.getByTestId('cancel-edit-mode-btn').click();
+        await expect(page.getByTestId('dashboard-edit-banner')).toHaveCount(0);
+        await expect(page.getByTestId('cards-for-later-sidebar')).toHaveCount(0);
+        await expect(firstCard).toHaveAttribute('data-grid-span', '6x4');
+
+        // R5: Re-enter Edit Mode to verify Left "Cards for Later" Sidebar, Deck Options inside sidebar, & Garbage Delete button in Card Option Menu
+        await toggleEditBtn.click();
+        const stashSidebar = page.getByTestId('cards-for-later-sidebar');
+        await expect(stashSidebar).toBeVisible();
+        await expect(stashSidebar).toHaveAttribute('data-position', 'left');
+        await expect(stashSidebar.getByTestId('sidebar-deck-options')).toBeVisible();
+        await expect(stashSidebar.getByTestId('edit-deck-form')).toBeVisible();
+        await expect(stashSidebar.getByTestId('edit-deck-title-input')).toBeVisible();
+        await expect(stashSidebar.getByTestId('deck-rotation-toggle')).toBeVisible();
+        await expect(page.getByTestId('cards-for-later-count')).toHaveText('0');
+
+        await page.getByTestId(`widget-options-btn-${firstWidgetId}`).click();
+        await expect(page.getByTestId(`widget-options-menu-${firstWidgetId}`)).toBeVisible();
+        await expect(page.getByTestId(`option-delete-widget-${firstWidgetId}`)).toBeVisible();
+        await page.getByTestId(`option-stash-widget-${firstWidgetId}`).click();
+
+        await expect(page.getByTestId('cards-for-later-count')).toHaveText('1');
+        await expect(cards).toHaveCount(1);
+
+        // Edit stashed card size by clicking its size badge in the Cards for Later sidebar
+        const stashedSizeBtn = page.locator('[data-testid^="stashed-card-size-btn-"]').first();
+        await expect(stashedSizeBtn).toBeVisible();
+        await expect(stashedSizeBtn).toContainText('6×4');
+        await stashedSizeBtn.click();
+
+        const stashedSizeEditor = page.locator('[data-testid^="stashed-card-size-editor-"]').first();
+        await expect(stashedSizeEditor).toBeVisible();
+
+        const stashedPreset4x3 = page.locator('[data-testid^="stashed-card-preset-4x3-"]').first();
+        await expect(stashedPreset4x3).toBeVisible();
+        await stashedPreset4x3.click();
+        await expect(stashedSizeBtn).toContainText('4×3');
+
+        // Restore stashed card back to the grid and verify it restores with the updated 4x3 size
+        const restoreBtn = page.locator('[data-testid^="restore-stashed-card-"]').first();
+        await expect(restoreBtn).toBeVisible();
+        await restoreBtn.click();
+        await expect(page.getByTestId('cards-for-later-count')).toHaveText('0');
+        await expect(cards).toHaveCount(2);
+        await expect(page.locator('[data-testid^="widget-card-"][data-grid-span="4x3"]')).toHaveCount(1);
+
+        // Delete a card using the garbage button inside the card option menu
+        const secondCard = cards.first();
+        const secondWidgetId = await secondCard.getAttribute('data-widget-id');
+        await page.getByTestId(`widget-options-btn-${secondWidgetId}`).click();
+        await page.getByTestId(`option-delete-widget-${secondWidgetId}`).click();
+        await expect(cards).toHaveCount(1);
+      } finally {
+        await cleanup.runAll();
+      }
+    },
+  );
 });

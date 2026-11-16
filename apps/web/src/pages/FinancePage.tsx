@@ -1805,3 +1805,7 @@ export function FinancePage() {
     </div>
   );
 }
+
+export const FinanceView = FinancePage;
+export default FinancePage;
+

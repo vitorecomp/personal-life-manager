@@ -35,6 +35,7 @@ import {
   type DashboardWidgetRecord,
   type FireProjectionRecord,
   type GoalRecord,
+  type GridRect,
   type LifeScoreResponse,
   type MonthlyPlanRecord,
   type PendingApprovalRecord,
@@ -69,9 +70,26 @@ export interface WidgetRendererProps {
   serverSummary?: ServerSummaryResponse | null;
   pendingApprovals?: PendingApprovalRecord[];
   liveTelemetry?: LiveMonitorTelemetry;
-  resolvedGridPlacement?: { gridColumn: string; gridRow: string };
+  resolvedGridPlacement?: {
+    gridColumn: string;
+    gridRow: string;
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+  };
   initialRefreshError?: string | null;
   onEditWidget?: (widget: DashboardWidgetRecord) => void;
+  isEditMode?: boolean;
+  onResizeWidget?: (widget: DashboardWidgetRecord, nextRect: GridRect) => void;
+  onDeleteWidget?: (widgetId: string) => void;
+  onStashWidget?: (widget: DashboardWidgetRecord) => void;
+  onDragStartWidget?: (widget: DashboardWidgetRecord, e: React.DragEvent) => void;
+  onDragOverWidget?: (widget: DashboardWidgetRecord, e: React.DragEvent) => void;
+  onDropOnWidget?: (targetWidget: DashboardWidgetRecord, e: React.DragEvent) => void;
+  onDragEndWidget?: () => void;
+  isDragging?: boolean;
+  isDropTarget?: boolean;
   kioskMode?: boolean;
 }
 
@@ -232,6 +250,16 @@ export function WidgetRenderer({
   resolvedGridPlacement,
   initialRefreshError = null,
   onEditWidget,
+  isEditMode = false,
+  onResizeWidget,
+  onDeleteWidget,
+  onStashWidget,
+  onDragStartWidget,
+  onDragOverWidget,
+  onDropOnWidget,
+  onDragEndWidget,
+  isDragging = false,
+  isDropTarget = false,
   kioskMode = false,
 }: WidgetRendererProps) {
   const queryClient = useQueryClient();
@@ -239,6 +267,7 @@ export function WidgetRenderer({
   const [newSrvHost, setNewSrvHost] = useState('127.0.0.1');
   const [newSrvPort, setNewSrvPort] = useState('8080');
   const [showAddServer, setShowAddServer] = useState(false);
+  const [showOptionsMenu, setShowOptionsMenu] = useState(false);
 
   const rect = widget.grid_rect ?? {
     x: widget.grid_x ?? 0,
@@ -255,10 +284,12 @@ export function WidgetRenderer({
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async () =>
-      apiDelete(
+    mutationFn: async () => {
+      onDeleteWidget?.(widget.id);
+      return apiDelete(
         `/api/dashboards/${encodeURIComponent(deckId)}/widgets/${encodeURIComponent(widget.id)}`,
-      ),
+      ).catch(() => null);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dashboards'] });
     },
@@ -345,7 +376,7 @@ export function WidgetRenderer({
           </div>
           <div data-fui-ring="true" style={{ borderRadius: '0px' }}>
             <LifeRadarReticle
-              size={180}
+              size={isEditMode ? 80 : 180}
               compositeScore={composite}
               pillars={[
                 { key: 'focus', label: 'FOCUS', score: Number(p.focus ?? 0) },
@@ -486,7 +517,7 @@ export function WidgetRenderer({
             <WaveformSparkline
               data={sparkData}
               title="BIO_CONSISTENCY_7D"
-              height={56}
+              height={isEditMode ? 24 : 56}
             />
           </div>
         </div>
@@ -572,7 +603,7 @@ export function WidgetRenderer({
               mode="investment"
               currency="BRL"
               title="MONTHLY_INVESTABLE_SURPLUS"
-              height={156}
+              height={isEditMode ? 68 : 156}
             />
           ) : builtinKey.includes('fire_gauge') || builtinKey === 'net_worth_fire' ? (
             <div data-fui-ring="true" style={{ display: 'flex', justifyContent: 'center' }}>
@@ -581,7 +612,7 @@ export function WidgetRenderer({
                 hatchedPct={passivePct}
                 centerLabel={`${fiPct.toFixed(1)}%`}
                 durationLabel={durationLabel}
-                size={148}
+                size={isEditMode ? 72 : 148}
               />
             </div>
           ) : (
@@ -798,7 +829,7 @@ export function WidgetRenderer({
                       <WaveformSparkline
                         data={srv.latency_history_ms.slice(-24)}
                         title={`LATENCY // ${srv.name}`}
-                        height={44}
+                        height={isEditMode ? 22 : 44}
                       />
                     </div>
                   )}
@@ -905,7 +936,7 @@ export function WidgetRenderer({
         </div>
         <div data-fui-ring="true" style={{ display: 'flex', justifyContent: 'center' }}>
           <ConstellationMesh
-            size={180}
+            size={isEditMode ? 80 : 180}
             nodes={constellationNodes}
             edges={constellationEdges}
             title="SECOND_BRAIN // CONSTELLATION"
@@ -961,7 +992,7 @@ export function WidgetRenderer({
           <WaveformSparkline
             data={numbers}
             title={`TRACE // ${widget.title}`}
-            height={52}
+            height={isEditMode ? 24 : 52}
           />
         </div>
       );
@@ -1499,6 +1530,15 @@ export function WidgetRenderer({
   const spanH = Math.min(8, Math.max(1, Number(rect.h) || 3));
   const rawX = Number(rect.x);
   const rawY = Number(rect.y);
+  const effectiveW = resolvedGridPlacement?.w ?? spanW;
+  const effectiveH = resolvedGridPlacement?.h ?? spanH;
+  const effectiveX =
+    resolvedGridPlacement?.x ??
+    (Number.isInteger(rawX) && rawX >= 0 ? Math.min(12 - effectiveW, rawX) : 0);
+  const effectiveY =
+    resolvedGridPlacement?.y ??
+    (Number.isInteger(rawY) && rawY >= 0 ? Math.min(8 - effectiveH, rawY) : 0);
+
   const defaultGridColumn =
     Number.isInteger(rawX) && rawX >= 0 && rawX + spanW <= 12
       ? `${rawX + 1} / span ${spanW}`
@@ -1508,19 +1548,131 @@ export function WidgetRenderer({
       ? `${rawY + 1} / span ${spanH}`
       : `span ${spanH}`;
 
+  const clampCardRect = (next: { x: number; y: number; w: number; h: number }): GridRect => {
+    const w = Math.min(12, Math.max(1, Math.round(Number(next.w)) || 4));
+    const h = Math.min(8, Math.max(1, Math.round(Number(next.h)) || 3));
+    const x = Math.min(12 - w, Math.max(0, Math.round(Number(next.x)) || 0));
+    const y = Math.min(8 - h, Math.max(0, Math.round(Number(next.y)) || 0));
+    return { x, y, w, h };
+  };
+
+  const resizeActiveRef = React.useRef(false);
+
+  const startResizeDrag = (
+    axis: 'e' | 's' | 'se',
+    startClientX: number,
+    startClientY: number,
+  ) => {
+    if (!onResizeWidget || resizeActiveRef.current) return;
+    resizeActiveRef.current = true;
+    const gridEl = document.querySelector('[data-testid="room-monitor-grid"]');
+    const gridBounds = gridEl?.getBoundingClientRect();
+    const colStepPx =
+      gridBounds && gridBounds.width > 120 ? gridBounds.width / 12 : 80;
+    const rowStepPx =
+      gridBounds && gridBounds.height > 160 ? Math.max(28, gridBounds.height / 8) : 80;
+
+    let latestW = effectiveW;
+    let latestH = effectiveH;
+
+    const computeNext = (clientX: number, clientY: number) => {
+      const dx = clientX - startClientX;
+      const dy = clientY - startClientY;
+      const deltaCols = axis === 'e' || axis === 'se' ? Math.round(dx / colStepPx) : 0;
+      const deltaRows = axis === 's' || axis === 'se' ? Math.round(dy / rowStepPx) : 0;
+      latestW = Math.min(12, Math.max(1, effectiveW + deltaCols));
+      latestH = Math.min(8, Math.max(1, effectiveH + deltaRows));
+    };
+
+    const handleMove = (ev: MouseEvent | PointerEvent) => {
+      computeNext(ev.clientX, ev.clientY);
+    };
+
+    let finished = false;
+    const handleUp = (ev: MouseEvent | PointerEvent) => {
+      if (finished) return;
+      finished = true;
+      resizeActiveRef.current = false;
+      computeNext(ev.clientX, ev.clientY);
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('mouseup', handleUp);
+      onResizeWidget(
+        widget,
+        clampCardRect({
+          x: effectiveX,
+          y: effectiveY,
+          w: latestW,
+          h: latestH,
+        }),
+      );
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('mouseup', handleUp);
+  };
+
+  const presetSpans: Array<[number, number]> = [
+    [3, 2],
+    [4, 3],
+    [4, 4],
+    [6, 4],
+    [6, 5],
+    [12, 4],
+  ];
+
   return (
     <article
       data-testid={`widget-card-${widget.id}`}
       data-widget-id={widget.id}
       data-source-kind={widget.source_kind}
       data-renderer-kind={widget.renderer_kind}
+      data-grid-x={effectiveX}
+      data-grid-y={effectiveY}
+      data-grid-w={effectiveW}
+      data-grid-h={effectiveH}
+      data-grid-span={`${effectiveW}x${effectiveH}`}
+      draggable={!kioskMode}
+      onDragStart={(e) => onDragStartWidget?.(widget, e)}
+      onDragOver={(e) => {
+        if (!kioskMode) {
+          e.preventDefault();
+          e.stopPropagation();
+          onDragOverWidget?.(widget, e);
+        }
+      }}
+      onDrop={(e) => {
+        if (!kioskMode) {
+          e.preventDefault();
+          e.stopPropagation();
+          onDropOnWidget?.(widget, e);
+        }
+      }}
+      onDragEnd={() => onDragEndWidget?.()}
       style={{
         gridColumn: resolvedGridPlacement?.gridColumn ?? defaultGridColumn,
         gridRow: resolvedGridPlacement?.gridRow ?? defaultGridRow,
+        position: 'relative',
+        zIndex: 2,
+        minWidth: 0,
+        minHeight: 0,
+        height: '100%',
+        maxHeight: '100%',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        pointerEvents: isDragging ? 'none' : 'auto',
         display: 'flex',
         flexDirection: 'column',
         backgroundColor: FUI_TOKENS.bgPanel,
-        border: `1px solid ${FUI_TOKENS.borderHairline}`,
+        border: isDropTarget
+          ? `2px solid ${FUI_TOKENS.accentVermilion}`
+          : isEditMode && !kioskMode
+            ? `1px solid ${FUI_TOKENS.accentOrange}`
+            : `1px solid ${FUI_TOKENS.borderHairline}`,
+        opacity: isDragging ? 0.65 : 1,
         color: FUI_TOKENS.inkStark,
         borderRadius: '0px',
       }}
@@ -1531,7 +1683,66 @@ export function WidgetRenderer({
         accent="orange"
         actions={
           !kioskMode ? (
-            <div style={{ display: 'flex', gap: '4px' }}>
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                flexWrap: 'wrap',
+                borderRadius: '0px',
+              }}
+            >
+              <span
+                data-testid={`widget-span-badge-${widget.id}`}
+                style={{
+                  padding: '2px 6px',
+                  fontSize: '12px',
+                  fontFamily: FUI_TOKENS.fontMono,
+                  backgroundColor: FUI_TOKENS.bgCarbon,
+                  color: isEditMode ? FUI_TOKENS.accentCyan : FUI_TOKENS.inkMuted,
+                  border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                  borderRadius: '0px',
+                }}
+              >
+                {isEditMode
+                  ? `${effectiveW}×${effectiveH} @${effectiveX},${effectiveY}`
+                  : `${effectiveW}×${effectiveH}`}
+              </span>
+              <button
+                type="button"
+                data-testid={`drag-handle-${widget.id}`}
+                aria-label={`Drag ${widget.title}`}
+                draggable={!kioskMode}
+                onDragStart={(e) => {
+                  e.stopPropagation();
+                  onDragStartWidget?.(widget, e);
+                }}
+                style={{
+                  padding: '2px 6px',
+                  fontSize: '12px',
+                  fontFamily: FUI_TOKENS.fontMono,
+                  backgroundColor: FUI_TOKENS.bgCarbon,
+                  color: isEditMode ? FUI_TOKENS.accentOrange : FUI_TOKENS.inkMuted,
+                  border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                  cursor: 'grab',
+                  borderRadius: '0px',
+                }}
+              >
+                ⠿
+              </button>
+              {onStashWidget && (
+                <FuiButton
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Save ${widget.title} for later`}
+                  title="Save card for later"
+                  data-testid={`stash-widget-${widget.id}`}
+                  onClick={() => onStashWidget(widget)}
+                >
+                  📥
+                </FuiButton>
+              )}
               {onEditWidget && (
                 <FuiButton
                   size="sm"
@@ -1556,19 +1767,620 @@ export function WidgetRenderer({
                 size="sm"
                 variant="ghost"
                 aria-label={`Delete ${widget.title}`}
+                title="Delete card"
                 data-testid={`delete-widget-${widget.id}`}
                 onClick={() => deleteMutation.mutate()}
               >
-                ✕
+                🗑
               </FuiButton>
+              <button
+                type="button"
+                data-testid={`widget-options-btn-${widget.id}`}
+                aria-label={`Options menu for ${widget.title}`}
+                aria-expanded={showOptionsMenu}
+                onClick={() => setShowOptionsMenu((prev) => !prev)}
+                style={{
+                  padding: '2px 6px',
+                  fontSize: '12px',
+                  fontFamily: FUI_TOKENS.fontMono,
+                  backgroundColor: showOptionsMenu ? FUI_TOKENS.accentOrange : FUI_TOKENS.bgCarbon,
+                  color: showOptionsMenu ? FUI_TOKENS.bgCarbon : FUI_TOKENS.inkStark,
+                  border: `1px solid ${
+                    showOptionsMenu ? FUI_TOKENS.accentOrange : FUI_TOKENS.borderHairline
+                  }`,
+                  cursor: 'pointer',
+                  borderRadius: '0px',
+                }}
+              >
+                ⋮
+              </button>
+
+              {showOptionsMenu && (
+                <div
+                  data-testid={`widget-options-menu-${widget.id}`}
+                  role="menu"
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: '4px',
+                    minWidth: '176px',
+                    zIndex: 30,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    padding: '4px',
+                    backgroundColor: FUI_TOKENS.bgCarbon,
+                    border: `1px solid ${FUI_TOKENS.accentOrange}`,
+                    borderRadius: '0px',
+                  }}
+                >
+                  {onEditWidget && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid={`option-edit-widget-${widget.id}`}
+                      onClick={() => {
+                        setShowOptionsMenu(false);
+                        onEditWidget(widget);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        width: '100%',
+                        padding: '5px 8px',
+                        fontSize: '12px',
+                        fontFamily: FUI_TOKENS.fontMono,
+                        color: FUI_TOKENS.inkStark,
+                        backgroundColor: FUI_TOKENS.bgPanel,
+                        border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                        cursor: 'pointer',
+                        borderRadius: '0px',
+                      }}
+                    >
+                      <span>✎ Edit Options</span>
+                    </button>
+                  )}
+                  {onStashWidget && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      data-testid={`option-stash-widget-${widget.id}`}
+                      onClick={() => {
+                        setShowOptionsMenu(false);
+                        onStashWidget(widget);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        width: '100%',
+                        padding: '5px 8px',
+                        fontSize: '12px',
+                        fontFamily: FUI_TOKENS.fontMono,
+                        color: FUI_TOKENS.accentCyan,
+                        backgroundColor: FUI_TOKENS.bgPanel,
+                        border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                        cursor: 'pointer',
+                        borderRadius: '0px',
+                      }}
+                    >
+                      <span>📥 Save for Later</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid={`option-delete-widget-${widget.id}`}
+                    onClick={() => {
+                      setShowOptionsMenu(false);
+                      deleteMutation.mutate();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      width: '100%',
+                      padding: '5px 8px',
+                      fontSize: '12px',
+                      fontFamily: FUI_TOKENS.fontMono,
+                      fontWeight: 700,
+                      color: FUI_TOKENS.accentVermilion,
+                      backgroundColor: FUI_TOKENS.bgPanel,
+                      border: `1px solid ${FUI_TOKENS.accentVermilion}`,
+                      cursor: 'pointer',
+                      borderRadius: '0px',
+                    }}
+                  >
+                    <span>🗑 Delete Card</span>
+                  </button>
+                </div>
+              )}
             </div>
           ) : undefined
         }
       />
 
-      <div style={{ flex: 1, padding: '10px', borderRadius: '0px' }}>
+      {/* R1 & R2 Edit Mode 2D Space Control Bar */}
+      {isEditMode && !kioskMode && (
+        <div
+          data-testid={`widget-size-controls-${widget.id}`}
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexShrink: 0,
+            gap: '2px',
+            padding: '2px 4px',
+            backgroundColor: FUI_TOKENS.bgCarbon,
+            borderBottom: `1px solid ${FUI_TOKENS.borderHairline}`,
+            fontFamily: FUI_TOKENS.fontMono,
+            fontSize: '12px',
+            lineHeight: 1.1,
+            borderRadius: '0px',
+          }}
+        >
+          {/* Width & Height Span Steppers + Selects */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              data-testid={`resize-widget-w-dec-${widget.id}`}
+              aria-label="Decrease width span"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: effectiveY,
+                    w: Math.max(1, effectiveW - 1),
+                    h: effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              -W
+            </button>
+            <select
+              data-testid={`widget-select-w-${widget.id}`}
+              aria-label="Column span"
+              value={String(effectiveW)}
+              onChange={(e) =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: effectiveY,
+                    w: Number.parseInt(e.target.value, 10) || effectiveW,
+                    h: effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 3px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                borderRadius: '0px',
+              }}
+            >
+              {Array.from({ length: 12 }, (_, idx) => idx + 1).map((colSpan) => (
+                <option key={colSpan} value={String(colSpan)}>
+                  W:{colSpan}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              data-testid={`resize-widget-w-inc-${widget.id}`}
+              aria-label="Increase width span"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: effectiveY,
+                    w: Math.min(12, effectiveW + 1),
+                    h: effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              +W
+            </button>
+
+            <button
+              type="button"
+              data-testid={`resize-widget-h-dec-${widget.id}`}
+              aria-label="Decrease height span"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: effectiveY,
+                    w: effectiveW,
+                    h: Math.max(1, effectiveH - 1),
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              -H
+            </button>
+            <select
+              data-testid={`widget-select-h-${widget.id}`}
+              aria-label="Row span"
+              value={String(effectiveH)}
+              onChange={(e) =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: effectiveY,
+                    w: effectiveW,
+                    h: Number.parseInt(e.target.value, 10) || effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 3px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                borderRadius: '0px',
+              }}
+            >
+              {Array.from({ length: 8 }, (_, idx) => idx + 1).map((rowSpan) => (
+                <option key={rowSpan} value={String(rowSpan)}>
+                  H:{rowSpan}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              data-testid={`resize-widget-h-inc-${widget.id}`}
+              aria-label="Increase height span"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: effectiveY,
+                    w: effectiveW,
+                    h: Math.min(8, effectiveH + 1),
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              +H
+            </button>
+          </div>
+
+          {/* Quick Preset Span Chips */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap' }}>
+            {presetSpans.map(([pw, ph]) => {
+              const isCurrent = effectiveW === pw && effectiveH === ph;
+              return (
+                <button
+                  key={`${pw}x${ph}`}
+                  type="button"
+                  data-testid={`widget-preset-${pw}x${ph}-${widget.id}`}
+                  onClick={() =>
+                    onResizeWidget?.(
+                      widget,
+                      clampCardRect({
+                        x: effectiveX,
+                        y: effectiveY,
+                        w: pw,
+                        h: ph,
+                      }),
+                    )
+                  }
+                  style={{
+                    padding: '1px 4px',
+                    fontSize: '12px',
+                    lineHeight: 1.1,
+                    fontFamily: FUI_TOKENS.fontMono,
+                    backgroundColor: isCurrent ? FUI_TOKENS.accentOrange : FUI_TOKENS.bgPanel,
+                    color: isCurrent ? FUI_TOKENS.bgCarbon : FUI_TOKENS.inkStark,
+                    border: `1px solid ${
+                      isCurrent ? FUI_TOKENS.accentOrange : FUI_TOKENS.borderHairline
+                    }`,
+                    cursor: 'pointer',
+                    borderRadius: '0px',
+                  }}
+                >
+                  {pw}×{ph}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Accessible Directional Move Buttons */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+            <button
+              type="button"
+              data-testid={`move-widget-left-${widget.id}`}
+              aria-label="Move widget left"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: Math.max(0, effectiveX - 1),
+                    y: effectiveY,
+                    w: effectiveW,
+                    h: effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              data-testid={`move-widget-up-${widget.id}`}
+              aria-label="Move widget up"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: Math.max(0, effectiveY - 1),
+                    w: effectiveW,
+                    h: effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              data-testid={`move-widget-down-${widget.id}`}
+              aria-label="Move widget down"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: effectiveX,
+                    y: Math.min(8 - effectiveH, effectiveY + 1),
+                    w: effectiveW,
+                    h: effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              data-testid={`move-widget-right-${widget.id}`}
+              aria-label="Move widget right"
+              onClick={() =>
+                onResizeWidget?.(
+                  widget,
+                  clampCardRect({
+                    x: Math.min(12 - effectiveW, effectiveX + 1),
+                    y: effectiveY,
+                    w: effectiveW,
+                    h: effectiveH,
+                  }),
+                )
+              }
+              style={{
+                padding: '1px 4px',
+                fontSize: '12px',
+                lineHeight: 1.1,
+                fontFamily: FUI_TOKENS.fontMono,
+                backgroundColor: FUI_TOKENS.bgPanel,
+                color: FUI_TOKENS.inkStark,
+                border: `1px solid ${FUI_TOKENS.borderHairline}`,
+                cursor: 'pointer',
+                borderRadius: '0px',
+              }}
+            >
+              →
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          padding: isEditMode && !kioskMode ? '4px 6px' : '6px 8px',
+          overflow: 'hidden',
+          borderRadius: '0px',
+        }}
+      >
         {widget.source_kind === 'builtin' ? renderBuiltinBody() : renderCustomBody()}
       </div>
+
+      {/* Android Home Screen Widget Resize Handles in Edit Mode */}
+      {isEditMode && !kioskMode && (
+        <>
+          <button
+            type="button"
+            data-testid={`resize-handle-e-${widget.id}`}
+            aria-label={`Resize ${widget.title} width`}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              startResizeDrag('e', e.clientX, e.clientY);
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              startResizeDrag('e', e.clientX, e.clientY);
+            }}
+            style={{
+              position: 'absolute',
+              top: '50%',
+              right: '0px',
+              transform: 'translateY(-50%)',
+              padding: '4px 3px',
+              fontSize: '12px',
+              fontFamily: FUI_TOKENS.fontMono,
+              backgroundColor: FUI_TOKENS.accentOrange,
+              color: FUI_TOKENS.bgCarbon,
+              border: 'none',
+              cursor: 'ew-resize',
+              borderRadius: '0px',
+              zIndex: 5,
+            }}
+          >
+            ⋮
+          </button>
+          <button
+            type="button"
+            data-testid={`resize-handle-s-${widget.id}`}
+            aria-label={`Resize ${widget.title} height`}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              startResizeDrag('s', e.clientX, e.clientY);
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              startResizeDrag('s', e.clientX, e.clientY);
+            }}
+            style={{
+              position: 'absolute',
+              bottom: '0px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              padding: '1px 8px',
+              fontSize: '12px',
+              fontFamily: FUI_TOKENS.fontMono,
+              backgroundColor: FUI_TOKENS.accentOrange,
+              color: FUI_TOKENS.bgCarbon,
+              border: 'none',
+              cursor: 'ns-resize',
+              borderRadius: '0px',
+              zIndex: 5,
+            }}
+          >
+            ⋯
+          </button>
+          <button
+            type="button"
+            data-testid={`resize-handle-${widget.id}`}
+            aria-label={`Resize ${widget.title} span`}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              startResizeDrag('se', e.clientX, e.clientY);
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              startResizeDrag('se', e.clientX, e.clientY);
+            }}
+            style={{
+              position: 'absolute',
+              bottom: '0px',
+              right: '0px',
+              padding: '2px 5px',
+              fontSize: '12px',
+              fontFamily: FUI_TOKENS.fontMono,
+              backgroundColor: FUI_TOKENS.accentOrange,
+              color: FUI_TOKENS.bgCarbon,
+              border: 'none',
+              cursor: 'nwse-resize',
+              borderRadius: '0px',
+              zIndex: 6,
+            }}
+          >
+            ◢
+          </button>
+        </>
+      )}
     </article>
   );
 }

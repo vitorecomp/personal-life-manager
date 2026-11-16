@@ -1,0 +1,88 @@
+name: hermes-os
+
+services:
+  # ===========================================================================
+  # 1. PostgreSQL 16 + pgvector (Primary Relational & Vector Store)
+  # ===========================================================================
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16
+    container_name: hermes_os_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hermes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hermes}
+      POSTGRES_DB: ${POSTGRES_DB:-hermes_os}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./initdb/01-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+    healthcheck:
+      test: "pg_isready -U ${POSTGRES_USER:-hermes} -d ${POSTGRES_DB:-hermes_os}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ===========================================================================
+  # 2. Redis 7 (Cache, Quote/FX Buffer & Background Coordination)
+  # ===========================================================================
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: hermes_os_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: "redis-cli ping"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 2s
+
+  # ===========================================================================
+  # 3. HERMES // OS Unified Server (Axum REST + SSE + /mcp + Static Web SPA)
+  # ===========================================================================
+  hermes-server:
+    build:
+      context: ..
+      dockerfile: infra-deploy/Dockerfile
+    image: localhost/hermes-os-server:latest
+    container_name: hermes_os_server
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      RUST_LOG: ${RUST_LOG:-info}
+      DATABASE_URL: postgres://${POSTGRES_USER:-hermes}:${POSTGRES_PASSWORD:-hermes}@postgres:5432/${POSTGRES_DB:-hermes_os}
+      REDIS_URL: redis://redis:6379
+      HERMES_GATEWAY_URL: ${HERMES_GATEWAY_URL:-http://host.containers.internal:8642/v1}
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+      STATIC_DIST_DIR: /app/apps/web/dist
+      YOUTUBE_LISTS_DB: /app/data/database/youtube-lists.sqlite
+      YOUTUBE_LISTS_NOTES_DIR: /app/data/knowledge-data/lists/youtube
+      SECOND_BRAIN_DIR: /app/data/second-brain
+      HERMES_ADMIN_USER: ${HERMES_ADMIN_USER:-operator}
+      HERMES_ADMIN_PASSWORD: ${HERMES_ADMIN_PASSWORD:-hermes-os-local}
+      HERMES_BOOTSTRAP_PAT: ${HERMES_BOOTSTRAP_PAT:-}
+      REQUIRE_WEB_LOGIN: ${REQUIRE_WEB_LOGIN:-false}
+    ports:
+      - "${HERMES_SERVER_PORT:-8080}:8080"
+    volumes:
+      - ../../data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: "curl -fsS http://127.0.0.1:8080/api/health || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:

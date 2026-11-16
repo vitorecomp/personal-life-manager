@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "app": "hermes-os-sprite-v1",
+    "version": "1.0.0",
+    "image": "frieren-mini.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 256,
+      "h": 224
+    },
+    "frameSize": {
+      "w": 32,
+      "h": 32
+    },
+    "scale": 2
+  },
+  "animations": {
+    "idle_ledge_sit": {
+      "row": 0,
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    "walk_ledge": {
+      "row": 1,
+      "frames": 6,
+      "fps": 10,
+      "loop": true
+    },
+    "read_grimoire": {
+      "row": 2,
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    "cast_blue_flora": {
+      "row": 3,
+      "frames": 8,
+      "fps": 10,
+      "loop": false
+    },
+    "sip_tea": {
+      "row": 4,
+      "frames": 6,
+      "fps": 8,
+      "loop": true
+    },
+    "cozy_nap": {
+      "row": 5,
+      "frames": 4,
+      "fps": 6,
+      "loop": true
+    },
+    "mimic_gag": {
+      "row": 6,
+      "frames": 8,
+      "fps": 10,
+      "loop": false
+    }
+  }
+}

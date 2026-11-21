@@ -8,6 +8,9 @@
 !/data/*/
 /data/*/*
 !/data/*/.gitkeep
+# The vault is its own git repository whose .gitignore re-includes *.md and Library/**; nested
+# .gitignore rules override these, so the whole folder must be ignored for git not to descend into it.
+/data/second-brain/
 
 # Dependency directories
 node_modules/

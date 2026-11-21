@@ -45,7 +45,7 @@ if [[ -d "$TARGET_DIR/.git" ]]; then
     git -C "$TARGET_DIR" pull --ff-only
     echo -e "${GREEN}==> Second brain successfully updated!${NC}"
 elif [[ -d "$TARGET_DIR" ]]; then
-    # The folder already exists (it holds the .gitkeep tracked by this repository), so git clone
+    # The folder already exists (e.g. it holds a .gitkeep or notes created before the clone), so git clone
     # can't target it: clone the history aside, move it in and check the files out in place.
     echo -e "${YELLOW}==> Directory $TARGET_DIR already exists but is not a git repository.${NC}"
     echo -e "${YELLOW}==> Initializing and pulling into second-brain...${NC}"

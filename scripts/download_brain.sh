@@ -53,7 +53,8 @@ elif [[ -d "$TARGET_DIR" ]]; then
     trap 'rm -rf "$TMP_DIR"' EXIT
     git clone --no-checkout "$REPO_URL" "$TMP_DIR/repo"
     mv "$TMP_DIR/repo/.git" "$TARGET_DIR/.git"
-    git -C "$TARGET_DIR" checkout -- .
+    # A --no-checkout clone leaves the index empty, so check the files out from HEAD (not the index).
+    git -C "$TARGET_DIR" checkout HEAD -- .
     echo ".gitkeep" >> "$TARGET_DIR/.git/info/exclude"
     echo -e "${GREEN}==> Second brain successfully cloned!${NC}"
 else

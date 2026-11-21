@@ -61,7 +61,7 @@ services:
       HERMES_API_KEY: ${HERMES_API_KEY:-}
       STATIC_DIST_DIR: /app/apps/web/dist
       YOUTUBE_LISTS_DB: /app/data/database/youtube-lists.sqlite
-      YOUTUBE_LISTS_NOTES_DIR: /app/data/knowledge-data/lists/youtube
+      YOUTUBE_LISTS_NOTES_DIR: /app/data/knowledge-data/youtube
       SECOND_BRAIN_DIR: /app/data/second-brain
       HERMES_ADMIN_USER: ${HERMES_ADMIN_USER:-operator}
       HERMES_ADMIN_PASSWORD: ${HERMES_ADMIN_PASSWORD:-hermes-os-local}

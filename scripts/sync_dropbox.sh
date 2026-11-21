@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Syncs with Dropbox what git does not keep: everything in data/ except the second brain's Markdown
-# notes. That is data/database/ (SQLite databases, logs, the Hermes Agent state in hermes-mds/), all
-# of data/knowledge-data/ (crawler output, notes included) and any non-Markdown file of
-# data/second-brain/. The second brain's notes are versioned in git and pushed to GitHub (see its
-# .gitignore), so the two never overlap.
+# Syncs data/ with Dropbox, except the second brain's Markdown notes (versioned in its git repository).
+# That is data/database/ (SQLite databases, logs, the Hermes Agent state in hermes-mds/), all of
+# data/knowledge-data/ (crawler output, notes included: Dropbox is its only backup) and any
+# non-Markdown file of data/second-brain/.
 #
 # Usage:
 #   ./scripts/sync_dropbox.sh                 push: make Dropbox match data/ (default)
@@ -36,7 +35,7 @@ env_value() {
     printf '%s' "${value:-$default}"
 }
 
-usage() { sed -n '4,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '4,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 ACTION="push"
 DRY_RUN=()

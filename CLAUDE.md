@@ -15,7 +15,7 @@ Important architectural fact: the Go backend does **not** use Postgres or Redis 
 
 The stack is orchestrated by the root `podman-compose.yml` (postgres, redis, personal-backend, personal-frontend). `infra-deploy/` holds the infra-only compose definitions.
 
-`data/` is gitignored local data with three folders: `second-brain/` (clone of the private Obsidian vault, synced via `./scripts/download_brain.sh`), `knowledge-data/` (crawler output) and `database/` (SQLite files, plus `hermes-mds/` with the Hermes Agent state). Never track or commit anything under it.
+`data/` is gitignored local data with three folders: `second-brain/` (clone of the private Obsidian vault, synced via `./scripts/download_brain.sh`), `knowledge-data/` (crawler output, backed up to Dropbox only) and `database/` (SQLite files, plus `hermes-mds/` with the Hermes Agent state). Never track or commit anything under it.
 
 ## Commands
 

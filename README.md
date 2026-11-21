@@ -47,7 +47,7 @@ flowchart TD
 | **`personal-system/`** | Full-stack platform (Golang API + Next.js UI) to administer time, tasks, and servers, plus goals and routines. | [View Personal System](file:///home/vitor/workspace/personal/personal-life-manager/personal-system/README.md) |
 | **`sub-systems/`** | Standalone sub-systems, automated bots, and game tools (`auto-players`, `satisfatory-plan`). | [Explore Sub-Systems](file:///home/vitor/workspace/personal/personal-life-manager/sub-systems/README.md) |
 | **`scripts/`** | Helper scripts (e.g. syncing Obsidian Second Brain GitHub repository). | [Explore Scripts](file:///home/vitor/workspace/personal/personal-life-manager/scripts/README.md) |
-| **`data/`** *(gitignored)* | Local data: `second-brain/` (clone of the Obsidian vault), `knowledge-data/` (crawler output) and `database/` (SQLite files, Hermes Agent state in `hermes-mds/`). | `second-brain/` synced via `./scripts/download_brain.sh` |
+| **`data/`** *(gitignored)* | Local data: `second-brain/` (clone of the Obsidian vault), `knowledge-data/` (crawler output, Dropbox only) and `database/` (SQLite files, Hermes Agent state in `hermes-mds/`). | `second-brain/` synced via `./scripts/download_brain.sh` |
 
 ---
 

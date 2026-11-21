@@ -39,7 +39,7 @@ personal-life-manager/
 ├── sub-systems/           # Standalone bots and game automations (auto-players, satisfatory-plan)
 ├── data/                  # [GITIGNORED] Local data
 │   ├── second-brain/      # Clone of the Obsidian Second Brain markdown vault
-│   ├── knowledge-data/    # Crawler output (Markdown notes)
+│   ├── knowledge-data/    # Crawler output (Markdown notes), backed up to Dropbox only
 │   └── database/          # SQLite files used by the crawlers, hermes-mds/ (Hermes Agent state)
 ├── mise.toml              # Tool version manager configuration (Go)
 ├── podman-compose.yml     # Root orchestrator for multi-container stack

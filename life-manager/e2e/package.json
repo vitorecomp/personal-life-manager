@@ -1,0 +1,26 @@
+{
+  "name": "@hermes-e2e/suite",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node ./run-e2e.mjs",
+    "test:tier1": "node ./run-e2e.mjs --tier 1",
+    "test:tier2": "node ./run-e2e.mjs --tier 2",
+    "test:tier3": "node ./run-e2e.mjs --tier 3",
+    "test:tier4": "node ./run-e2e.mjs --tier 4",
+    "test:list": "node ./run-e2e.mjs --list",
+    "dry-check": "node ./run-e2e.mjs --dry-check",
+    "self-test": "node ./run-e2e.mjs --self-test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "24.19.2",
+    "typescript": "~5.8.3"
+  }
+}

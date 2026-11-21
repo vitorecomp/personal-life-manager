@@ -105,17 +105,24 @@ restart with `podman-compose up -d hermes`.
 The dashboard is at [http://localhost:9119](http://localhost:9119) (this machine only). The model
 is set in `data/database/hermes-mds/config.yaml`.
 
-### 5. Obsidian in the browser (same vault)
-The `obsidian` service runs Obsidian ([linuxserver/obsidian](https://docs.linuxserver.io/images/docker-obsidian/))
-with `data/second-brain/` mounted at `/vault`, so you and Hermes edit the same notes.
+### 5. SilverBullet: the vault in the browser
+The `silverbullet` service runs [SilverBullet](https://silverbullet.md), a web Markdown editor, over
+`data/second-brain/`, so you and Hermes edit the same notes. It understands `[[wikilinks]]` like
+Obsidian; Obsidian-only plugins and syntax (Dataview, callouts) are not rendered the same way.
 
 ```bash
-podman-compose up -d obsidian
+podman-compose up -d silverbullet
 ```
 
-Open [https://localhost:3010](https://localhost:3010) (accept the self-signed certificate), choose
-**Open folder as vault** and pick `/vault`. It is bound to localhost only, since it is a full remote
-desktop; to reach it from another machine, use an SSH tunnel (`ssh -L 3010:localhost:3010 <host>`).
+On start, the one-shot `silverbullet-libs` service runs `scripts/silverbullet-libs.sh`, which installs
+the pinned libraries (Mermaid, LaTeX Math, Silversearch, PDF Viewer, Markdown Prettify, Excalidraw,
+Basic Search) and the TreeView plug into the vault's `Library/` when they are missing. To update one,
+bump its URL in the script and delete its page in `Library/` (or update it from SilverBullet's
+Library Manager). The vault's `.gitignore` versions `Library/` whole, so a fresh clone works offline.
+
+Open [http://localhost:3010](http://localhost:3010). It is bound to localhost only; to reach it from
+another machine, use an SSH tunnel (`ssh -N -L 3010:localhost:3010 <host>`). For the full Obsidian
+app, install it on each computer and open the vault (or a clone of its repository) directly.
 
 ---
 

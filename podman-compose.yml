@@ -117,32 +117,36 @@ services:
     command: ["gateway", "run"]
 
   # ===================================================
-  # 6. Obsidian (web) - the same vault Hermes works on, in the browser
+  # 6. SilverBullet - web editor over the same vault Hermes works on
   # ===================================================
-  # Start alone with: podman-compose up -d obsidian
-  # Open:             https://localhost:3010 (self-signed certificate), then "Open folder as vault" -> /vault
-  obsidian:
-    image: lscr.io/linuxserver/obsidian:latest
-    container_name: obsidian
-    restart: unless-stopped
-    # Same idea as hermes: your host user becomes uid 911 inside, the image's `abc` user, so files
-    # edited here stay owned by you on the host.
-    userns_mode: "keep-id:uid=911,gid=911"
-    user: "0:0"
-    environment:
-      PUID: "911"
-      PGID: "911"
-      TZ: ${TZ:-America/Sao_Paulo}
+  # One-shot helper: installs the SilverBullet libraries pinned in scripts/silverbullet-libs.sh into
+  # the vault when they are missing, then exits. SilverBullet picks the new files up by itself.
+  silverbullet-libs:
+    image: docker.io/curlimages/curl:latest
+    container_name: silverbullet-libs
+    restart: "no"
+    user: "0:0"                        # root inside = your host user under rootless podman
+    entrypoint: ["sh", "/scripts/silverbullet-libs.sh"]
     volumes:
-      - obsidian_config:/config        # app settings and the list of opened vaults
-      - ./data/second-brain:/vault
+      - ./scripts/silverbullet-libs.sh:/scripts/silverbullet-libs.sh:ro
+      - ./data/second-brain:/data
+
+  # Start alone with: podman-compose up -d silverbullet
+  # Open:             http://localhost:3010 (bound to localhost only; reach it remotely via an SSH tunnel)
+  silverbullet:
+    image: ghcr.io/silverbulletmd/silverbullet:latest
+    container_name: silverbullet
+    restart: unless-stopped
+    depends_on:
+      - silverbullet-libs
+    # SilverBullet runs as the owner of the folder mounted at /data. Under rootless podman your host
+    # user is root inside, so the files it writes stay owned by you on the host.
+    volumes:
+      - ./data/second-brain:/data
     ports:
-      # HTTPS only (the image needs a secure context) and localhost only: this is a full remote desktop.
-      - "127.0.0.1:3010:3001"
-    shm_size: "1gb"                    # Electron needs it
+      - "127.0.0.1:3010:3000"
 
 volumes:
   postgres_data:
   redis_data:
   personal_backend_data:
-  obsidian_config:

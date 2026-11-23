@@ -68,7 +68,6 @@ ENV PORT=8080 \
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
+# The health check lives in podman-compose.yml: podman builds OCI images, which have no HEALTHCHECK.
 
 CMD ["/app/server"]

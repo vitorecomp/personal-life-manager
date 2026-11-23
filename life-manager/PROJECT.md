@@ -166,7 +166,7 @@ Found during M4B discovery: with its default environment the E2E harness points 
   - `HERMES_GATEWAY_URL=http://127.0.0.1:8642/v1` (with `HERMES_API_KEY` optional)
   - `STATIC_DIST_DIR=../apps/web/dist` (or `/app/apps/web/dist` in container; resolved gracefully relative to workspace/cwd)
   - `YOUTUBE_LISTS_DB=../data/database/youtube-lists.sqlite` (or repo-root-resolved `data/database/youtube-lists.sqlite`, opened **strictly read-only** `SQLITE_OPEN_READ_ONLY`—never created if missing!)
-  - `YOUTUBE_LISTS_NOTES_DIR=data/knowledge-data/lists/youtube`
+  - `YOUTUBE_LISTS_NOTES_DIR=data/knowledge-data/youtube`
   - `SECOND_BRAIN_DIR=data/second-brain`
   - `HERMES_ADMIN_USER=operator`, `HERMES_ADMIN_PASSWORD=hermes-os-local`, `HERMES_BOOTSTRAP_PAT` (optional bootstrap `plm_pat_...` whose `SHA-256` is registered on startup), `REQUIRE_WEB_LOGIN=false` (single-owner local daily-driver default).
 - **Web SPA (`apps/web`)**: Vite dev port `5173` proxying `/api` & `/mcp` to `http://127.0.0.1:8080`; production static `apps/web/dist` served directly by Axum on `:8080`. Workspace package name: `@hermes/web`.

@@ -52,7 +52,7 @@ impl LifeOpsConfig {
             .unwrap_or_else(|_| repo_root.join("data/database/youtube-lists.sqlite"));
         let youtube_lists_notes_dir = std::env::var("YOUTUBE_LISTS_NOTES_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root.join("data/knowledge-data/lists/youtube"));
+            .unwrap_or_else(|_| repo_root.join("data/knowledge-data/youtube"));
         let admin_user = std::env::var("HERMES_ADMIN_USER")
             .ok()
             .filter(|v| !v.trim().is_empty())

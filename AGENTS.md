@@ -171,7 +171,7 @@ podman-compose stop hermes
 - **Strict Mobile Scope (`02-companion-app.md`)**: `apps/mobile` exposes **only** `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG`—never include routes or views for Web-only modules (`03`, `04`, `05`, `09`, `10`, `11`).
 
 ### 5.3. Crawlers & Document Contracts (`crawlers/`)
-- Preserve existing `crawlers/youtube-lists`, `crawlers/youtube-ai`, and `crawlers/youtube-clean` workflows untouched. Backend Course Tracker reads `data/database/youtube-lists.sqlite` strictly via `SQLITE_OPEN_READ_ONLY` (never creating or mutating crawler SQLite files) alongside Markdown notes in `data/knowledge-data/lists/youtube/`.
+- Preserve existing `crawlers/youtube-lists`, `crawlers/youtube-ai`, and `crawlers/youtube-clean` workflows untouched. Backend Course Tracker reads `data/database/youtube-lists.sqlite` strictly via `SQLITE_OPEN_READ_ONLY` (never creating or mutating crawler SQLite files) alongside Markdown notes in `data/knowledge-data/youtube/`.
 - Generic web/RSS crawlers normalize captured documents into the standard ingestion schema:
 ```json
 {

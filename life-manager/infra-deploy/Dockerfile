@@ -63,7 +63,7 @@ ENV PORT=8080 \
     RUST_LOG=info \
     STATIC_DIST_DIR=/app/apps/web/dist \
     YOUTUBE_LISTS_DB=/app/data/database/youtube-lists.sqlite \
-    YOUTUBE_LISTS_NOTES_DIR=/app/data/knowledge-data/lists/youtube \
+    YOUTUBE_LISTS_NOTES_DIR=/app/data/knowledge-data/youtube \
     SECOND_BRAIN_DIR=/app/data/second-brain
 
 EXPOSE 8080

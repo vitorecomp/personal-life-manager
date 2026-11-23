@@ -52,12 +52,15 @@ services:
     image: localhost/hermes-os-server:latest
     container_name: hermes_os_server
     restart: unless-stopped
+    # Host network, like the hermes service: the Hermes API only listens on the host's 127.0.0.1:8642,
+    # which a bridged container cannot reach. Postgres and Redis are reached through their published ports.
+    network_mode: host
     environment:
-      PORT: 8080
+      PORT: ${HERMES_SERVER_PORT:-8080}
       RUST_LOG: ${RUST_LOG:-info}
-      DATABASE_URL: postgres://${POSTGRES_USER:-hermes}:${POSTGRES_PASSWORD:-hermes}@postgres:5432/${POSTGRES_DB:-hermes_os}
-      REDIS_URL: redis://redis:6379
-      HERMES_GATEWAY_URL: ${HERMES_GATEWAY_URL:-http://host.containers.internal:8642/v1}
+      DATABASE_URL: postgres://${POSTGRES_USER:-hermes}:${POSTGRES_PASSWORD:-hermes}@127.0.0.1:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-hermes_os}
+      REDIS_URL: redis://127.0.0.1:${REDIS_PORT:-6379}
+      HERMES_GATEWAY_URL: ${HERMES_GATEWAY_URL:-http://127.0.0.1:8642/v1}
       HERMES_API_KEY: ${HERMES_API_KEY:-}
       STATIC_DIST_DIR: /app/apps/web/dist
       YOUTUBE_LISTS_DB: /app/data/database/youtube-lists.sqlite
@@ -67,8 +70,6 @@ services:
       HERMES_ADMIN_PASSWORD: ${HERMES_ADMIN_PASSWORD:-hermes-os-local}
       HERMES_BOOTSTRAP_PAT: ${HERMES_BOOTSTRAP_PAT:-}
       REQUIRE_WEB_LOGIN: ${REQUIRE_WEB_LOGIN:-false}
-    ports:
-      - "${HERMES_SERVER_PORT:-8080}:8080"
     volumes:
       - ./data:/app/data
     depends_on:

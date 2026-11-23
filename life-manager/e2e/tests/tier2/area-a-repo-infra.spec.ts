@@ -338,7 +338,6 @@ test.describe('Area A Tier 2 — Repository, Gitignore, Config & Migration Bound
         'podman-compose.yml',
         'infra-deploy/README.md',
         'infra-deploy/podman-compose.yml',
-        'infra-deploy/docker-compose.yml',
       ];
 
       for (const rel of filesToCheck) {

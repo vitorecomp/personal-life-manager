@@ -47,7 +47,7 @@ personal-life-manager/
 ├── sub-systems/                    # [READ-ONLY — DO NOT MODIFY] satisfatory-plan, auto-players
 ├── systems-requirements/           # [READ-ONLY — DO NOT MODIFY] Authoritative v1.0 specs & assets/REF-01..14b
 ├── data/                           # [GITIGNORED — ZERO TRACKED FILES] second-brain/, knowledge-data/, database/
-├── infra-deploy/                   # [Owner: M1, refined in M6] Dockerfile, podman-compose.yml, docker-compose.yml
+├── infra-deploy/                   # [Owner: M1, refined in M6] Dockerfile, podman-compose.yml
 ├── podman-compose.yml              # [Owner: M1, refined in M6] Root unified multi-container stack
 ├── mise.toml                       # [Owner: M1] Rust + Node + pnpm tool config
 ├── package.json / pnpm-workspace.yaml / tsconfig.base.json # [Owner: M1]

@@ -62,7 +62,7 @@ personal-life-manager/
 │   ├── ui/                     # Shared REF-02 Tactical FUI & Pixel-Art Sprite components
 │   └── api-client/             # Auto-generated OpenAPI TypeScript types & query hooks
 ├── crawlers/                   # [KEEP] Working Python crawlers (youtube-lists, youtube-ai, etc.)
-├── infra-deploy/               # Podman / Docker Compose (Postgres+pgvector, Redis, Rust+SPA)
+├── infra-deploy/               # Podman Compose (Postgres+pgvector, Redis, Rust+SPA)
 ├── scripts/                    # Vault & Dropbox sync scripts
 ├── sub-systems/                # Standalone bots & tools
 ├── systems-requirements/       # Locked v1.0 Markdown specifications & visual atlas

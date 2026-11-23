@@ -23,7 +23,7 @@ Welcome to the documentation hub for **`HERMES // OS` (Personal Life Manager)**.
 | [`crawlers/`](../crawlers/README.md) | **Capture** | Python YouTube playlist/AI note collectors (`youtube-lists`, `youtube-ai`, `youtube-clean`) and web/RSS crawler templates. |
 | [`scripts/`](../scripts/README.md) | **Sync & Hygiene** | Obsidian Second Brain vault clone/pull (`download_brain.sh`), Dropbox rclone sync (`sync_dropbox.sh`), and git hooks. |
 | [`sub-systems/`](../sub-systems/README.md) | **Standalone Tools** | Independent automation sub-systems and calculators (`auto-players`, `satisfatory-plan`). |
-| [`life-manager/infra-deploy/`](../life-manager/infra-deploy/README.md) | **Deploy & Run** | Unified multi-stage `Dockerfile`, Podman/Docker Compose stacks, and `pgvector` initialization scripts. |
+| [`life-manager/infra-deploy/`](../life-manager/infra-deploy/README.md) | **Deploy & Run** | Unified multi-stage `Dockerfile` (built by podman), Podman Compose stacks, and `pgvector` initialization scripts. |
 | [`life-manager/systems-requirements/`](../life-manager/systems-requirements/README.md) | **Specifications** | Locked v1.0 specifications (`01`–`12`) and visual reference assets (`REF-01`–`REF-14`). |
 | `data/` *(gitignored)* | **Private Vault** | Zero-tracked local directory holding `second-brain/`, `knowledge-data/`, and `database/`. |
 | `hermes` / `silverbullet` services ([`podman-compose.yml`](../podman-compose.yml)) | **Agent & Vault Editor** | Hermes Agent container (the `hermes gateway` on `:8642`) over the vault in `data/second-brain/`, and the SilverBullet web editor over the same vault. |

@@ -26,7 +26,7 @@ personal-life-manager/
 │   ├── apps/                    # @hermes/web (Vite + React 19 SPA) & @hermes/mobile (Capacitor SQLite companion)
 │   ├── e2e/                     # Playwright E2E test suite & harness
 │   ├── systems-requirements/    # Authoritative v1.0 specifications (01-12) and visual reference atlas (REF-01..14)
-│   ├── infra-deploy/            # Multi-stage Dockerfile, Compose files, and initdb/01-pgvector.sql
+│   ├── infra-deploy/            # Multi-stage Dockerfile (built by podman), podman-compose.yml, and initdb/01-pgvector.sql
 │   ├── mise.toml                # Toolchain manager config (Rust, Node 24, pnpm 10.34.7)
 │   ├── package.json             # pnpm@10.34.7 workspace manifest
 │   └── pnpm-workspace.yaml      # Workspace globs (apps/*, packages/*)
@@ -38,7 +38,6 @@ personal-life-manager/
 │   ├── second-brain/            # Obsidian vault (its own git repository), mounted by hermes & silverbullet
 │   ├── knowledge-data/          # Crawler output (Markdown notes), backed up to Dropbox only
 │   └── database/                # Crawler SQLite files, hermes-mds/ (Hermes Agent state)
-├── docker-compose.yml           # Root Docker Compose orchestrator (postgres, redis, hermes-server)
 └── podman-compose.yml           # Root Podman Compose orchestrator (postgres, redis, hermes-server)
 ```
 
@@ -52,7 +51,7 @@ personal-life-manager/
 | **`apps/web`** | Vite 7, React 19, TanStack Router, TanStack Query v5, Zustand | 100% client-rendered Web SPA covering Room Monitor (`03`), Hermes (`04`), Knights (`05`), Frieren (`06`), Todos (`07`), Routines (`08`), Goals (`09`), Courses (`10`), and Finance (`11`). | `apps/web/src/main.tsx`, `apps/web/vite.config.ts` |
 | **`apps/mobile`** | Capacitor 8, Vite 7, React 19, `@capacitor-community/sqlite`, `sql.js` | Offline-first companion app strictly scoped to `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG` with `UUIDv7` delta sync (`/api/sync/*`). | `apps/mobile/capacitor.config.ts`, `apps/mobile/src/App.tsx` |
 | **`crawlers/`** | Python 3 | YouTube playlist/transcript collectors (`youtube-lists`, `youtube-ai`, `youtube-clean`) and standardized content crawlers. | `crawlers/README.md`, `crawlers/template_crawler.py` |
-| **`infra-deploy/`** | Podman / Docker Compose | PostgreSQL 16 (`pgvector/pgvector:pg16`), Redis 7 (`redis:7-alpine`), and multi-stage `hermes-server` image. | `infra-deploy/Dockerfile`, `podman-compose.yml` |
+| **`infra-deploy/`** | Podman Compose | PostgreSQL 16 (`pgvector/pgvector:pg16`), Redis 7 (`redis:7-alpine`), and multi-stage `hermes-server` image. | `infra-deploy/Dockerfile`, `podman-compose.yml` |
 | **`scripts/`** | Bash / Python | Obsidian vault sync (`./scripts/download_brain.sh`), Dropbox sync (`./scripts/sync_dropbox.sh`), and secret-guard git hooks. | `scripts/README.md`, `scripts/git-hooks/pre-commit` |
 | **`hermes`** / **`silverbullet`** (services) | Official container images | Hermes Agent (Gemini) gateway on `:8642` over the vault (`data/second-brain/`), state in `data/database/hermes-mds/`; SilverBullet web editor over the same vault on `127.0.0.1:3010`, libraries installed by `scripts/silverbullet-libs.sh`. Not code in this repo. | `podman-compose.yml` |
 
@@ -64,14 +63,14 @@ personal-life-manager/
   - Avoid crate features requiring `cmake` or `clang`/`bindgen`/`aws-lc-sys` (use `rustls` with `ring` or system OpenSSL; never enable `rmcp` `auth-client-credentials-jwt`).
   - Use `sqlx::migrate!("../../migrations")` + runtime `sqlx::query` / `sqlx::query_as` (`FromRow`) rather than compile-time `sqlx::query!` macros.
 - **Node.js & pnpm**: Node.js `24` LTS + **`corepack pnpm@10.34.7`** (`"packageManager": "pnpm@10.34.7"`, `typescript: "~5.8.3"`). Always invoke `corepack pnpm@10.34.7` rather than unpinned `pnpm`.
-- **Containers**: Rootless `podman` & `podman-compose` (or Docker Compose) running PostgreSQL 16 (`:5432`) and Redis 7 (`:6379`).
+- **Containers**: Rootless `podman` & `podman-compose` running PostgreSQL 16 (`:5432`) and Redis 7 (`:6379`).
 - **Python**: Python `3.10+` for `crawlers/` and `scripts/git-hooks/pre-commit`.
 
 ---
 
 ## 🚀 4. Common Commands & Workflows
 
-### 4.1. Infrastructure & Container Stack (Podman / Docker)
+### 4.1. Infrastructure & Container Stack (Podman)
 
 From the repository root:
 ```bash

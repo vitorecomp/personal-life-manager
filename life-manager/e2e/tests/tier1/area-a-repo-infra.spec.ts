@@ -391,11 +391,7 @@ test.describe('Area A Tier 1 — Repository Hygiene, Infrastructure, Migrations 
     '[T1][F03] podman-compose.yml and infra-deploy/ define pgvector:pg16, redis:7-alpine, 01-pgvector.sql, and unified multi-stage Dockerfile',
     { tag: ['@tier1', '@F03'] },
     async () => {
-      for (const composeRel of [
-        'podman-compose.yml',
-        'infra-deploy/podman-compose.yml',
-        'infra-deploy/docker-compose.yml',
-      ]) {
+      for (const composeRel of ['podman-compose.yml', 'infra-deploy/podman-compose.yml']) {
         const composeText = fs.readFileSync(
           resolveAnyRoot(composeRel),
           'utf8',
@@ -404,7 +400,9 @@ test.describe('Area A Tier 1 — Repository Hygiene, Infrastructure, Migrations 
         expect(composeText).toContain('redis:7-alpine');
         expect(composeText).toContain('hermes-server');
         expect(composeText).toContain('/app/apps/web/dist');
-        expect(composeText).toMatch(/8080\}?:8080/);
+        // The root stack runs hermes-server on the host network (to reach the Hermes API on
+        // 127.0.0.1:8642), so it sets PORT instead of publishing a port.
+        expect(composeText).toMatch(/8080\}?:8080|PORT: \$\{HERMES_SERVER_PORT:-8080\}/);
         expect(composeText).toContain('01-pgvector.sql');
       }
 

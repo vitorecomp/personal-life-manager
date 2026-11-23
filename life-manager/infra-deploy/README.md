@@ -13,7 +13,7 @@ The unified compose stack (`name: hermes-os`) runs 3 core services:
 
 ---
 
-## 🚀 Running with Podman or Docker
+## 🚀 Running with Podman
 
 ### Local Development (Database & Cache Only)
 From the repository root:
@@ -42,8 +42,6 @@ Or deploy directly from `infra-deploy/` (explicitly pass `-f` so a single compos
 ```bash
 cd infra-deploy
 podman-compose -f podman-compose.yml up -d
-# or with Docker Engine:
-docker compose -f docker-compose.yml up -d
 ```
 
 ---

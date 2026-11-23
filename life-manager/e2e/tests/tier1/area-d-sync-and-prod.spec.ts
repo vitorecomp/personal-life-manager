@@ -682,11 +682,6 @@ test.describe('Area D Tier 1 — F08 Scoped UUIDv7 Mobile Delta Sync & F36 Full-
         'infra-deploy',
         'podman-compose.yml',
       );
-      const infraDockerPath = path.join(
-        E2E_PATHS.repoRoot,
-        'infra-deploy',
-        'docker-compose.yml',
-      );
       const dockerfilePath = path.join(E2E_PATHS.repoRoot, 'infra-deploy', 'Dockerfile');
       const pgvectorSqlPath = path.join(
         E2E_PATHS.repoRoot,
@@ -697,16 +692,16 @@ test.describe('Area D Tier 1 — F08 Scoped UUIDv7 Mobile Delta Sync & F36 Full-
 
       expect(fs.existsSync(rootComposePath)).toBe(true);
       expect(fs.existsSync(infraPodmanPath)).toBe(true);
-      expect(fs.existsSync(infraDockerPath)).toBe(true);
       expect(fs.existsSync(dockerfilePath)).toBe(true);
       expect(fs.existsSync(pgvectorSqlPath)).toBe(true);
 
-      for (const composeFile of [rootComposePath, infraPodmanPath, infraDockerPath]) {
+      for (const composeFile of [rootComposePath, infraPodmanPath]) {
         const content = fs.readFileSync(composeFile, 'utf8');
         expect(content).toContain('pgvector/pgvector:pg16');
         expect(content).toContain('redis:7-alpine');
         expect(content).toContain('hermes-server');
-        expect(content).toContain('${HERMES_SERVER_PORT:-8080}:8080');
+        // The root stack runs hermes-server on the host network, so it sets PORT instead.
+        expect(content).toMatch(/\$\{HERMES_SERVER_PORT:-8080\}(:8080)?/);
         expect(content).toContain('/app/apps/web/dist');
       }
 

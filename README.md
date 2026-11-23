@@ -60,7 +60,7 @@ flowchart TD
 | **`life-manager/apps/web/`** | 100% client-rendered Vite + React 19 Web SPA across Modules `03`–`11` (`/dashboard`, `/monitor`, `/hermes`, `/agents`, `/todos`, `/routines`, `/goals`, `/courses`, `/finance`). | [System Specs](./life-manager/systems-requirements/README.md) |
 | **`life-manager/apps/mobile/`** | Capacitor + Vite React CSR offline-first mobile companion scoped strictly to `ROUTINES`, `TODOS`, `COMPANION`, and `UPLINK_CONFIG`. | [Companion Spec](./life-manager/systems-requirements/02-companion-app.md) |
 | **`crawlers/`** | Python ingestion tools (`youtube-lists`, `youtube-ai`, `youtube-clean`) and standardized crawler templates. | [Explore Crawlers](./crawlers/README.md) |
-| **`life-manager/infra-deploy/`** | Multi-stage `Dockerfile`, Podman/Docker Compose manifests (`pgvector:pg16`, `redis:7-alpine`, `hermes-server`), and `initdb/`. | [View Deploy Specs](./life-manager/infra-deploy/README.md) |
+| **`life-manager/infra-deploy/`** | Multi-stage `Dockerfile` (built by podman), Podman Compose manifests (`pgvector:pg16`, `redis:7-alpine`, `hermes-server`), and `initdb/`. | [View Deploy Specs](./life-manager/infra-deploy/README.md) |
 | **`scripts/`** | Automation helpers for Obsidian vault sync (`download_brain.sh`), Dropbox rclone sync (`sync_dropbox.sh`), and git secret hooks. | [Explore Scripts](./scripts/README.md) |
 | **`sub-systems/`** | Standalone sub-systems, automated bots, and simulation tools (`auto-players`, `satisfatory-plan`). | [Explore Sub-Systems](./sub-systems/README.md) |
 | **`documentation/`** | Conceptual architecture overview and Second Brain CODE methodology notes. | [View Docs](./documentation/README.md) |
@@ -71,7 +71,7 @@ flowchart TD
 
 ## ⚡ Quickstart
 
-### Option A — Unified Container Stack (`Podman` / `Docker`)
+### Option A — Unified Container Stack (`Podman`)
 ```bash
 # 1. Optional: copy environment overrides and sync your Obsidian Second Brain vault
 cp .env.example .env
